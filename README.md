@@ -1,0 +1,206 @@
+# mac-to-tv
+
+Local web UI, served by a Mac, to control a TV on the local network and play videos on it: YouTube-style player,
+Stremio-style movie catalog, files from the Mac, ad-free YouTube links, torrents, burned-in subtitles,
+remote.
+
+## Which TVs are compatible?
+
+| | What you need | Status |
+|---|---|---|
+| **Playing videos** (the whole player, the catalog, subtitles) | A TV with a **DLNA/UPnP** network player ("MediaRenderer"), found on most smart TVs: Samsung, LG, Sony, Philips, Panasonic, Grundig, Beko… | Tested only on a **Grundig Ultralogic 4K** (Arçelik Smart Inter@ctive 4.0 OS). The rest is standard DLNA, not verified elsewhere. |
+| **Full remote** (power/standby, mute, volume, backlight, motion smoothing, channel list) | A driver for the brand | Only one driver: **Arçelik group TVs** (Grundig, Beko…) running Smart Inter@ctive. |
+| **Minimal remote** (volume, mute) | The TV's DLNA player | Automatic on any compatible TV without a brand driver. |
+| **Opening the TV's YouTube app** | DIAL (standard) | Automatic if the TV advertises it. |
+
+The TV is chosen in the page: a click on its name, at the top, starts a search on the local network. The TVs found
+are listed with what will work; a TV detected without a network player is shown as "not compatible". The remote's
+buttons adapt to the chosen TV.
+
+Chromecast, Apple TV / AirPlay and Fire TV are not supported (no DLNA player).
+
+**Your TV is not in the list?** Test it and add it: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Three files: `server.py` (video sources and API, Python with no pip dependency), `tv.py` (TV discovery and control)
+and `index.html` (the page).
+
+## Installing on a new Mac
+
+Requirements: macOS, [Homebrew](https://brew.sh), and the Mac on the same local network as the TV.
+
+```sh
+# 1. Tools (Python 3 comes with yt-dlp; so does deno, which yt-dlp needs for YouTube)
+brew install yt-dlp ffmpeg ffmpeg-full
+
+# 2. The project
+git clone https://github.com/Edracoon/mac-to-tv.git && cd mac-to-tv
+
+# 3. Torrent engine: TorrServer (not in Homebrew, not in the repository), version MatriX.147.2
+#    Apple Silicon Mac: TorrServer-darwin-arm64 — Intel Mac: TorrServer-darwin-amd64
+mkdir -p bin
+curl -L -o bin/TorrServer \
+  https://github.com/YouROK/TorrServer/releases/download/MatriX.147.2/TorrServer-darwin-arm64
+chmod +x bin/TorrServer
+
+# 4. Check
+python3 server.py --selftest
+```
+
+| Tool | Role | Required? |
+|---|---|---|
+| `python3` (≥ 3.10) | runs `server.py` | yes |
+| `yt-dlp` | finds the video streams of a link (YouTube…) | for links |
+| `ffmpeg` | muxes picture + sound on the fly, thumbnails | for links |
+| `ffmpeg-full` | burns the subtitles into the picture (Homebrew's standard `ffmpeg` lacks the `subtitles` filter) | for subtitles |
+| `bin/TorrServer` | progressive playback of torrents | for torrents |
+
+Versions used during development (November 2026): Python 3.15.2, yt-dlp 2026.10.26, ffmpeg 9.0.2, TorrServer MatriX.147.2.
+YouTube changes often: if a link fails, start with `brew upgrade yt-dlp`.
+
+## Running
+
+```sh
+python3 server.py [movies_folder] [--lan]     # default folder: ~/Movies; --lan: local network access
+# → open http://127.0.0.1:8765
+```
+
+- On first launch, the page opens the TV search; the choice is saved in `config.json`.
+- Environment variables: `PORT` (default `8765`), `TV_IP` (forces a TV without going through the page).
+- The first time a video is sent, macOS asks to allow Python to accept incoming connections: accept, otherwise the TV cannot read the stream.
+- `server.py` starts and stops TorrServer by itself (port 8090, local only).
+- Stopping: `kill $(lsof -ti tcp:8765 -sTCP:LISTEN)`. Log: `server.log` if started with `> server.log 2>&1`.
+- The Mac must stay on and awake during playback.
+
+## Running it all the time (macOS service)
+
+To leave it running on a Mac that stays at home:
+
+```sh
+./service.sh install [movies_folder]   # start now, at every login, and restart if it crashes
+./service.sh status                    # is it running?
+./service.sh logs                      # follow server.log
+./service.sh uninstall                 # stop and remove the service
+```
+
+- It installs a per-user launchd agent (`~/Library/LaunchAgents/com.mac-to-tv.plist`) that runs `server.py --lan`.
+  Nothing system-wide is changed, and `uninstall` removes everything.
+- **Sleep**: while the server runs, the Mac stays awake when it is plugged in (the server starts `caffeinate -s`).
+  On battery, or with a laptop lid closed, the Mac sleeps as usual: playback stops, and the server resumes on wake.
+  For a laptop used as a server, leave it plugged in with the lid open.
+- **After a reboot** the server starts once you log in.
+- At each start the server tidies up: cache files older than a week are deleted, `server.log` is emptied above 5 MB,
+  and a TorrServer left behind by a killed server is stopped.
+- From a phone, use the name printed at startup (`http://<mac-name>.local:8765/?key=…`) rather than the IP address,
+  which can change on a laptop.
+- If YouTube links stop working, update the extractor: `brew upgrade yt-dlp`.
+
+## Movie catalog (Stremio add-ons)
+
+The page queries Stremio-format add-ons directly (open protocol: `manifest.json`, `/catalog`, `/meta`,
+`/stream`, `/subtitles`). Nothing to install: they are web services.
+
+- Add-on list: `config.json` (created on the first change; copy it to another Mac to keep your add-ons).
+- By default: Cinemeta (`https://v3-cinemeta.strem.io`, catalog and detail pages) and OpenSubtitles v3
+  (`https://opensubtitles-v3.strem.io`, subtitles), the two official Stremio add-ons.
+- No **source** add-on is provided: add some in the page ("Add-ons", below the catalog) by pasting
+  the address of its `manifest.json`. Without one, the detail pages are shown but have nothing to play.
+- A click on a source calls `POST /api/play`: torrent (`infoHash`) → TorrServer; direct link (`url`) → relayed as is.
+- Subtitles chosen in the detail page → downloaded into `cache/subs/` then burned in (live stream, sound converted to stereo AAC).
+- **Automatic subtitle selection and checking.** An add-on's file is often timed for another
+  release of the movie. Two safeguards:
+  1. the page ranks the files of a language by similarity between their release name and the video file name
+     (WEB/BluRay/CAM source, resolution, year, group) — the "automatic" option of the detail page;
+  2. during playback, the server checks in the background: if the video file contains a text subtitle track
+     (any language), it reads two 2 min excerpts from it (10% and 70% of the movie) and looks, for each candidate,
+     for an offset and a speed that fit both. If one candidate clearly stands out, it keeps it (file changed
+     and/or timings corrected) and restarts the stream at the same position; otherwise it changes nothing. The result is kept in
+     `cache/subs/sync-*` and the page announces it ("Subtitles checked…").
+  Limits: without a subtitle track in the video file, no checking; the thresholds were tuned on a single movie.
+- **Manual adjustment**: the player's "earlier" / "later" buttons shift the subtitles in 0.5 s steps
+  (`POST /api/subdelay {delta}`); the stream restarts at the same position and the offset is kept for resume.
+  The burn-in itself is exact (checked with a clock video, including after a seek): pausing and resuming shift nothing.
+- Movies only for now (no series).
+
+### Resume
+
+- As long as a catalog movie is playing, the server records its position every 10 s in `progress.json` (a single profile),
+  with the chosen source and subtitles. It works with the page closed.
+- The page shows a "Continue or rewatch" row and, in the detail page, "Resume at xx:xx" / "Start over".
+  A movie watched past 95% is marked as finished.
+- The page address keeps the choice: `/?film=tt…&source=<torrent identifier>&file=<no.>&subs=<id>`.
+  Reopening this link reopens the detail page with the source and subtitles preselected; nothing starts without a click.
+- Starting from scratch: delete `progress.json` (server stopped).
+
+## Network and security
+
+- By default, the UI and the API only answer on `127.0.0.1`.
+- **Access from a phone or another PC**: start with `python3 server.py --lan`. The server then prints an address
+  like `http://192.168.1.18:8765/?key=…`. Open it once on the device: the key is remembered for one year (cookie).
+  The key is in `lan-key.txt`; delete this file and restart to change it (the devices will have to open the new link).
+  Without the key, a device on the network gets a refusal (403). Access stays limited to the local network: do not forward this port on the router.
+- Only `/media/<token>/…` is reachable from the local network: this is where the TV reads the current video
+  (random token, renewed on every send).
+- Reserve the TV's IP in the router (static DHCP lease); if it changes, just choose the TV again in the page.
+
+## TV control (`tv.py`)
+
+Each capability is detected separately, for each device found by SSDP:
+
+| Capability | How | Class |
+|---|---|---|
+| Player | UPnP services `AVTransport` and `RenderingControl`, addresses read from the device description | `TV.soap()` |
+| Remote | the first driver in the `REMOTES` list whose `probe()` answers | `ArcelikRemote`, then `UpnpRemote` |
+| Apps | DIAL: address given by the `Application-URL` header | `TV.dial()` |
+
+**Adding a brand**: write a class with `label`, `keys` (among `power`, `mute`, `v+`, `v-`, `bl+`, `bl-`, `memc`),
+`has_channels`, `probe(tv)` and `press(key)`, then put it at the head of `REMOTES`. The UI shows the advertised keys
+by itself. Known leads, not written for lack of TVs to test them on: Samsung (WebSocket 8001/8002, on-screen pairing),
+LG webOS (WebSocket 3000, pairing), Sony Bravia (IRCC over HTTP, pre-shared key), Roku (ECP over HTTP, port 8060),
+Philips (JointSpace), Android TV (encrypted pairing, the heaviest).
+
+Check what discovery sees: `python3 tv.py`.
+
+The step-by-step guide to test your TV, fix playback or write a driver is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Arçelik driver (Grundig, Beko… running Smart Inter@ctive), probed on 2026-11-17
+
+| Port | Service | Use here |
+|---|---|---|
+| variable (found by SSDP) | DLNA player | play, pause, seek, volume |
+| 8085 (and 443) | WebSocket `/foo` without authentication ("remote tester" left by the manufacturer) | keys `power`, `mute`, `v+`, `v-`, `bl+`, `bl-`, `memc` |
+| 8085 `/list` | list of digital terrestrial (DTT) channels (JSON) | display only |
+| 56789 / 56790 | DIAL | open the YouTube app (Netflix answers 503) |
+
+Quirks observed on this TV (other DLNA players may behave differently):
+- the DLNA player's port changes every time the player restarts → addresses re-read automatically;
+- files must be served over HTTP/1.1 with Range, otherwise the TV stays on "loading" and refuses pause and seek;
+- formats played: MKV, MP4, MOV, AVI, MPEG-TS, FLV; H.264 + AAC is the safe combination;
+- **subtitles**: the TV ignores external `.srt` files and does not display embedded tracks (MKV/MP4) →
+  burn-in into the picture with `ffmpeg-full` (`h264_videotoolbox` hardware re-encoding). It is also the most
+  portable method: it does not depend on the TV.
+
+## How each source is played
+
+| Source | Path |
+|---|---|
+| File from the Mac | served as is to the TV (with Range) |
+| YouTube & co link | `yt-dlp` gives the addresses → `ffmpeg` muxes to MPEG-TS without re-encoding → TV. A seek restarts the stream. |
+| Magnet link / torrent | TorrServer downloads in playback order (in memory) → relayed to the TV like a file |
+| "Download first" | `yt-dlp` downloads into `cache/`, then the file is sent (fallback) |
+| Catalog movie | source chosen in the detail page → TorrServer or direct link, relayed to the TV |
+| With subtitles | goes through the live stream, subtitles burned in (chosen in the movie's detail page; for a local file: `POST /api/cast {path, burn}`, no button) |
+
+Known limits: Arte does not start at the beginning of a movie (unresolved); multi-file torrents → largest video file;
+no re-encoding for formats the TV cannot decode.
+
+## Folders
+
+| Folder | Contents | Copy to another Mac? |
+|---|---|---|
+| `server.py`, `tv.py`, `index.html`, `service.sh`, `README.md`, `CONTRIBUTING.md` | the application | yes |
+| `config.json` | chosen TV and add-on list | yes, if you want to keep them |
+| `lan-key.txt` | local network access key (created by `--lan`) | no, it is recreated |
+| `progress.json` | movies started or finished and their position | yes, if you want to keep the history |
+| `bin/` | TorrServer | no, download it again (architecture-specific binary) |
+| `cache/` | "Download first" videos, thumbnails, subtitles; files older than a week are deleted at startup | no |
+| `torrserver-data/` | TorrServer settings and log | no |

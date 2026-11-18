@@ -1,0 +1,25 @@
+# --- Data specific to each installation: never in the repository ---
+# chosen TV and installed add-ons (recreated with the default values)
+config.json
+# movies started and playback position
+progress.json
+# local network access key (secret)
+lan-key.txt
+*.log
+
+# --- Downloaded or generated locally ---
+# TorrServer: to download for your architecture (see README)
+bin/
+# downloaded videos, thumbnails, subtitles
+cache/
+# TorrServer settings and log
+torrserver-data/
+subtest/
+
+# --- Python / macOS / editors ---
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.idea/
+.vscode/

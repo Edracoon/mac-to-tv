@@ -1,0 +1,1011 @@
+#!/usr/bin/env python3
+"""mac-to-tv: web interface to control a TV on the local network and play videos on it.
+
+    python3 server.py [movies_folder] [--lan]         # default folder: ~/Movies
+    → http://127.0.0.1:8765
+
+    python3 server.py --selftest                      # checks the pure functions (no network access)
+
+The TV is picked in the page (local network search); it is remembered in config.json.
+Environment variables: PORT (default 8765), TV_IP (forces a TV without going through the page).
+
+Layout:
+  - tv.py     : TV discovery, DLNA player, per-brand remote drivers, DIAL apps
+  - server.py : video sources (files, links via yt-dlp + ffmpeg, torrents via TorrServer), subtitles,
+                playback resume, HTTP API for the index.html page
+
+Security: the interface and the API only answer the Mac itself, or (with --lan) devices on the local network
+that present the key. Only /media/<token>/ is open to the local network, so the TV can read the current video.
+"""
+import atexit
+import base64
+import bisect
+import hashlib
+import hmac
+import html
+import ipaddress
+import json
+import mimetypes
+import os
+import re
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import quote, urlparse
+
+import tv as tvlib
+
+PORT = int(os.environ.get("PORT", "8765"))
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+MEDIA_DIR = Path(ARGS[0] if ARGS else "~/Movies").expanduser().resolve()
+HERE = Path(__file__).resolve().parent
+
+# Types advertised by the TV in GetProtocolInfo.
+MIME = {
+    ".mkv": "video/x-matroska", ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+    ".avi": "video/avi", ".ts": "video/vnd.dlna.mpeg-tts", ".mpg": "video/mpeg", ".mpeg": "video/mpeg",
+    ".flv": "video/x-flv", ".wmv": "video/x-ms-asf", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+    ".aac": "audio/vnd.dlna.adts", ".wav": "audio/wav", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+APPS = ("YouTube",)  # apps we can launch through DIAL
+I0 = "<InstanceID>0</InstanceID>"
+CACHE = HERE / "cache"  # ponytail: never purged, empty the folder by hand if the disk fills up
+sub_url = None  # address of the external subtitles for the current video
+shared = {}
+
+# --lan: opens the interface to the local network, protected by a key (lan-key.txt). Without the option: Mac only.
+LAN_KEY = None
+if "--lan" in sys.argv:
+    key_file = HERE / "lan-key.txt"
+    if not key_file.exists():
+        key_file.write_text(secrets.token_urlsafe(9))
+    LAN_KEY = key_file.read_text().strip()
+
+
+# --- TV ---------------------------------------------------------------------
+
+current_tv = None  # tvlib.TV picked in the page (or forced by TV_IP)
+
+
+def need_tv():
+    if not current_tv:
+        raise ValueError("no TV selected: pick one by clicking the name at the top of the page")
+    return current_tv
+
+
+def soap(service, action, args=""):
+    return need_tv().soap(service, action, args)
+
+
+def dial(app, method="GET", body=None):
+    return need_tv().dial(app, method, body)
+
+
+def connect_tv(ip, save=True):
+    """Selects the TV at this address (it must have a DLNA network player) and remembers it in config.json."""
+    global current_tv
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        raise ValueError("invalid IP address")
+    t = tvlib.TV(ip)
+    try:
+        t.refresh()
+    except RuntimeError:
+        raise ValueError(f"no TV found at {ip} (switched off, or on another network?)")
+    if not t.has_player:
+        raise ValueError("this TV has no DLNA network player: cannot send it a video")
+    current_tv = t
+    shared.clear()
+    if save:
+        save_config({**load_config(), "tv": {"ip": t.ip, "name": t.name}})
+    return t.info()
+
+
+def restore_tv():
+    """On startup: restores the TV from TV_IP or config.json, without blocking if it is off (re-read on first use)."""
+    global current_tv
+    saved = load_config().get("tv") or {}
+    ip = os.environ.get("TV_IP") or saved.get("ip")
+    if ip:
+        current_tv = tvlib.TV(ip, saved.get("name", ""))
+        try:
+            current_tv.refresh()
+        except Exception:
+            pass
+
+
+def status():
+    s = {}
+    s |= soap("RenderingControl", "GetVolume", I0 + "<Channel>Master</Channel>")
+    s |= soap("RenderingControl", "GetMute", I0 + "<Channel>Master</Channel>")
+    s |= soap("AVTransport", "GetTransportInfo", I0)
+    s |= soap("AVTransport", "GetPositionInfo", I0)
+    m = re.search(r"<dc:title>(.*?)</dc:title>", html.unescape(s.pop("TrackMetaData", "")))
+    s["title"] = html.unescape(m[1]) if m else ""
+    live = current_live()
+    if live and next(iter(shared)) in s.get("TrackURI", ""):
+        # the TV counts from the start of the stream and does not know its duration
+        s["RelTime"] = hms(secs(s.get("RelTime")) + live["offset"])
+        s["TrackDuration"] = hms(live["duration"])
+        s["title"] = live["title"]
+        if live.get("subs"):
+            s["subDelay"] = live.get("sub_delay", 0)
+            s["subsNote"] = live.get("note", "")
+    return s
+
+
+def apps():
+    return {app: need_tv().app_state(app) for app in APPS}
+
+
+def local_ip():
+    """Address of the Mac on the local network (the one it reaches the TV through)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((current_tv.ip if current_tv else "192.0.2.1", 9))  # UDP: no packet sent, just picks the interface
+        return s.getsockname()[0]
+
+
+def share(source, name, subs=None):
+    """Publishes a source (file, or live stream) for the TV under a tokenized address; only one at a time.
+    subs: .srt file served alongside (same token + "s"); its address is kept in sub_url."""
+    global sub_url
+    token = secrets.token_urlsafe(16)
+    base = f"http://{local_ip()}:{PORT}/media/"
+    shared.clear()
+    shared[token] = source
+    sub_url = None
+    if subs:
+        shared[token + "s"] = subs
+        sub_url = f"{base}{token}s/{quote(subs.name)}"
+    return f"{base}{token}/{quote(name)}"
+
+
+def current():
+    return next(iter(shared.values()), None)
+
+
+def current_live():
+    src = current()
+    return src if isinstance(src, dict) and "inputs" in src else None
+
+
+def play_on_tv(url, title, mime, features, size=""):
+    kind = {"audio": "audioItem.musicTrack", "image": "imageItem.photo"}.get(mime.split("/")[0], "videoItem")
+    subs = ""
+    if sub_url:  # the three common ways to advertise external subtitles to a DLNA player
+        su = html.escape(sub_url)
+        size += f' pv:subtitleFileType="SRT" pv:subtitleFileUri="{su}"'
+        subs = (f'<res protocolInfo="http-get:*:text/srt:*">{su}</res>'
+                f'<sec:CaptionInfoEx sec:type="srt">{su}</sec:CaptionInfoEx><sec:CaptionInfo sec:type="srt">{su}</sec:CaptionInfo>')
+    didl = ('<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" xmlns:sec="http://www.sec.co.kr/" xmlns:pv="http://www.pv.com/pvns/">'
+            '<item id="0" parentID="-1" restricted="1">'
+            f'<dc:title>{html.escape(title)}</dc:title><upnp:class>object.item.{kind}</upnp:class>'
+            f'<res protocolInfo="http-get:*:{mime}:{features}"{size}>{html.escape(url)}</res>{subs}</item></DIDL-Lite>')
+    try:
+        soap("AVTransport", "Stop", I0)
+    except Exception:
+        pass  # nothing playing: the TV may refuse Stop
+    soap("AVTransport", "SetAVTransportURI",
+         f"{I0}<CurrentURI>{html.escape(url)}</CurrentURI><CurrentURIMetaData>{html.escape(didl)}</CurrentURIMetaData>")
+    soap("AVTransport", "Play", I0 + "<Speed>1</Speed>")
+
+
+def cast(path, burn=None):
+    """burn: .srt file to burn into the picture (the video then goes through the live stream)."""
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        raise ValueError(f"file not found: {p}")
+    mime = MIME.get(p.suffix.lower()) or mimetypes.guess_type(p.name)[0] or "video/mp4"
+    title = re.sub(r" \[[\w-]{11}\]$", "", p.stem)
+    if burn:
+        burn = Path(burn).expanduser().resolve()
+        if not burn.is_file():
+            raise ValueError(f"subtitles not found: {burn}")
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(p)], capture_output=True, text=True)
+        return start_live({"title": title, "duration": int(float(r.stdout.strip() or 0)), "thumbnail": None, "offset": 0,
+                           "inputs": [(str(p), "")], "subs": burn})
+    srt = p.with_suffix(".srt")
+    play_on_tv(share(p, p.name, srt if srt.is_file() else None), title, mime, DLNA_FLAGS, f' size="{p.stat().st_size}"')
+    return {"title": title}
+
+
+# --- Live stream: yt-dlp provides the addresses, ffmpeg muxes picture + sound on the fly (without re-encoding)
+
+def link_info(url):
+    url, _ = norm_link(url)
+    r = subprocess.run(["yt-dlp", "--no-playlist", "--quiet", "--no-warnings", "-f", FORMAT, "-j", "--", url],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode:
+        raise RuntimeError("yt-dlp failed: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+    d = json.loads(r.stdout)
+    # YouTube rejects (403) the addresses until the ad delay is over: yt-dlp gives the time from which they work
+    ready = max((f.get("available_at") or 0) for f in d.get("requested_formats") or [d])
+    time.sleep(min(max(ready - time.time() + 0.5, 0), 30))
+    return {"title": d.get("title") or "Video", "duration": int(d.get("duration") or 0), "thumbnail": d.get("thumbnail"),
+            "offset": 0,
+            "inputs": [(f["url"], "".join(f"{k}: {v}\r\n" for k, v in (f.get("http_headers") or {}).items()))
+                       for f in d.get("requested_formats") or [d]]}
+
+
+# brew install ffmpeg-full: the standard ffmpeg lacks the subtitles filter (/opt/homebrew = Apple Silicon, /usr/local = Intel)
+FFMPEG_SUBS = next((p for p in ("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "/usr/local/opt/ffmpeg-full/bin/ffmpeg") if os.path.exists(p)), "ffmpeg")
+
+
+def live_cmd(live):
+    cmd = [FFMPEG_SUBS if live.get("subs") else "ffmpeg", "-v", "error"]
+    for u, headers in live["inputs"]:
+        if u.startswith("http"):
+            cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-headers", headers]
+        if live["offset"]:
+            cmd += ["-ss", str(live["offset"])]
+        cmd += ["-i", u]
+    for i in range(len(live["inputs"])):
+        cmd += ["-map", f"{i}:v?", "-map", f"{i}:a?"]
+    if live.get("subs"):
+        # The TV does not display external subtitles: we burn them into the picture (hardware re-encoding, ~8x real time).
+        # setpts: after a seek, the picture restarts from 0; we shift it so the subtitles land at the right time.
+        srt = str(live["subs"]).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        return cmd + ["-vf", f"setpts=PTS+({live['offset'] - live.get('sub_delay', 0)})/TB,subtitles='{srt}',setpts=PTS-STARTPTS",
+                      "-c:v", "h264_videotoolbox", "-b:v", "8M", "-c:a", "aac", "-ac", "2", "-b:a", "192k",  # stereo AAC sound: always plays
+                      "-f", "mpegts", "pipe:1"]
+    return cmd + ["-c", "copy", "-f", "mpegts", "pipe:1"]
+
+
+def start_live(live):
+    """(Re)starts the stream on the TV at live["offset"]: a stream has no middle, seeking = restarting from there."""
+    play_on_tv(share(live, "stream.ts"), live["title"], "video/mpeg", LIVE_FLAGS)
+    return {"title": live["title"]}
+
+
+def stream_link(url):
+    return start_live(link_info(url))
+
+
+# --- Torrents: TorrServer (bin/TorrServer, started with us, listens locally only) downloads the
+# pieces in playback order, in memory; we relay its HTTP stream to the TV like a file.
+
+TS = "http://127.0.0.1:8090"
+
+
+def local_names():
+    """Names this Mac answers to on the local network: stable addresses for phones, unlike the IP of a laptop."""
+    names = [socket.gethostname().lower()]  # name known to the router's DNS, e.g. "macbook-air.home"
+    try:  # Bonjour name (macOS), e.g. "macbook-air.local"
+        r = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True, timeout=5)
+        if r.stdout.strip():
+            names.insert(0, r.stdout.strip().lower() + ".local")
+    except OSError:
+        pass
+    return list(dict.fromkeys(names))
+
+
+LOCAL_NAMES = local_names()
+
+
+def tidy():
+    """Startup housekeeping, so the server can run for months: empty an oversized log, drop cache files older than
+    a week (downloads, thumbnails, subtitles), and stop a TorrServer left behind by a server that was killed."""
+    log = HERE / "server.log"
+    if log.exists() and log.stat().st_size > 5 << 20:
+        log.write_text("")
+    week_ago = time.time() - 7 * 86400
+    for f in CACHE.rglob("*"):
+        if f.is_file() and f.stat().st_mtime < week_ago:
+            f.unlink()
+    subprocess.run(["pkill", "-f", str(HERE / "bin" / "TorrServer")], capture_output=True)
+
+
+def start_torrserver():
+    exe, data = HERE / "bin" / "TorrServer", HERE / "torrserver-data"
+    if not exe.exists():
+        return
+    data.mkdir(exist_ok=True)
+    proc = subprocess.Popen([exe, "--ip", "127.0.0.1", "--port", "8090", "--path", data, "--logpath", data / "ts.log"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(proc.terminate)
+
+
+def ts(action, **args):
+    req = urllib.request.Request(TS + "/torrents", json.dumps({"action": action, **args}).encode(), {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise ValueError("torrent link rejected: " + e.read().decode()[:200])
+    except OSError:
+        raise RuntimeError("torrent engine unreachable (bin/TorrServer missing or stopped)")
+
+
+def is_torrent(link):
+    link = link.strip()
+    return link.startswith("magnet:") or bool(re.fullmatch(r"[0-9a-fA-F]{40}", link)) or link.split("?")[0].endswith(".torrent")
+
+
+def torrent_file(link, file_idx=None, filename=None):
+    """Adds the torrent to TorrServer and returns (local stream address, name, size) of the movie.
+    File choice: name given by the add-on, else position (Stremio fileIdx, 0-based), else largest video."""
+    h = ts("add", link=link.strip(), save_to_db=False)["hash"]
+    for _ in range(60):  # the file list arrives once a source has answered
+        files = ts("get", hash=h).get("file_stats") or []
+        if files:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("no source answered within 60 s for this torrent")
+    videos = [f for f in files if MIME.get(Path(f["path"]).suffix.lower(), "").startswith("video")]
+    if not videos:
+        raise ValueError("no video the TV can play in this torrent")
+    f = (next((f for f in videos if filename and Path(f["path"]).name == filename), None)
+         or next((f for f in videos if file_idx is not None and f["id"] == file_idx + 1), None)
+         or max(videos, key=lambda f: f["length"]))
+    name = Path(f["path"]).name
+    return f"{TS}/stream/{quote(name)}?link={h}&index={f['id']}&play", name, f["length"]
+
+
+def sub_delay(a):
+    """Shifts the burned-in subtitles by a["delta"] seconds (positive = later): the stream restarts at the same spot.
+    The subtitle file does not always match the release of the movie; the shift is remembered for resume."""
+    live = current_live()
+    if not (live and live.get("subs")):
+        raise ValueError("no burned-in subtitles currently playing")
+    live["sub_delay"] = round(min(max(live.get("sub_delay", 0) + float(a["delta"]), -120), 120), 1)
+    live["offset"] = secs(status().get("RelTime"))
+    with progress_lock:
+        p = progress.get(live.get("film"))
+        if p:
+            p["play"]["subDelay"] = live["sub_delay"]
+            save_progress()
+    start_live(live)
+    return {"subDelay": live["sub_delay"]}
+
+
+# --- Automatic subtitle check ---
+# An add-on's .srt is often timed for another release of the movie. The page already ranks the files by
+# similarity between their release name and the video file name. Here we check: when the video file contains
+# a text subtitle track (any language, necessarily right), we read two short excerpts of it (10% and
+# 70% of the movie) and look, for each candidate, for a shift + a speed (usual frame-rate ratios) that fits
+# both excerpts at once. Timings alone are a weak signal: we only act if one candidate clearly stands out.
+
+TEXT_SUBS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text"}
+SRT_CUE = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d{1,3})[ \t]*-->[ \t]*(\d+):(\d\d):(\d\d)[,.](\d{1,3})[^\n]*\n(.*?)(?=\n[ \t]*\n|\Z)", re.S)
+
+
+def parse_srt(text):
+    t = lambda h, m, sec, ms: int(h) * 3600 + int(m) * 60 + int(sec) + int(ms.ljust(3, "0")) / 1000
+    return [(t(*m.groups()[:4]), t(*m.groups()[4:8]), m[9]) for m in SRT_CUE.finditer(text.replace("\r\n", "\n"))]
+
+
+def write_srt(cues):
+    def stamp(x):
+        ms = round(max(x, 0) * 1000)
+        return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}"
+    return "\n".join(f"{i}\n{stamp(a)} --> {stamp(b)}\n{x}\n" for i, (a, b, x) in enumerate(cues, 1))
+
+
+def probe(url):
+    """(duration in s, index of the file's first text subtitle track, or None)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,codec_name", "-of", "json", url],
+                       capture_output=True, text=True, timeout=90)
+    d = json.loads(r.stdout or "{}")
+    tracks = [st.get("codec_name") for st in d.get("streams", []) if st.get("codec_type") == "subtitle"]
+    return int(float(d.get("format", {}).get("duration") or 0)), next((i for i, c in enumerate(tracks) if c in TEXT_SUBS), None)
+
+
+def ref_window(url, track, start, length=120, patience=90):
+    """Cue start times of the embedded track between start and start+length.
+    This part of the movie has to be read (torrent speed: ~25 s in 4K, a few seconds in 1080p). ffmpeg does not stop
+    by itself on a subtitle track: we read its output as it comes and kill it as soon as the excerpt is complete."""
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", str(start), "-i", url, "-map", f"0:s:{track}",
+                             "-c:s", "srt", "-flush_packets", "1", "-f", "srt", "pipe:1"], stdout=subprocess.PIPE)
+    timer = threading.Timer(patience, proc.kill)
+    timer.start()
+    text = ""
+    try:
+        while chunk := proc.stdout.read1(4096):
+            text += chunk.decode("utf-8", "replace")
+            cues = parse_srt(text)
+            if cues and cues[-1][0] >= length:
+                break
+    finally:
+        timer.cancel()
+        proc.kill()
+        proc.wait()
+    return sorted(start + a for a, _, _ in parse_srt(text) if a < length)
+
+
+SPEEDS = (1, 24 / 23.976, 23.976 / 24, 25 / 23.976, 23.976 / 25, 25 / 24, 24 / 25)
+
+
+def match_subs(starts, windows, reach=120, tol=0.3):
+    """Best (speed r, shift b) such that starts × r + b lands on the cues of both excerpts.
+    Returns (r, b, clear?) — clear: the best score dominates the 2nd distinct peak and the typical score, in each excerpt."""
+    scores = []
+    for r in SPEEDS:
+        near = [[t * r for t in starts if w[0] - 1 - reach <= t * r <= w[-1] + 1 + reach] for w in windows]
+        for k in range(-reach * 10, reach * 10 + 1):
+            b, hits = k / 10, []
+            for w, ts in zip(windows, near):
+                n = 0
+                for t in ts:
+                    u = t + b
+                    if w[0] - 1 <= u <= w[-1] + 1:
+                        i = bisect.bisect_left(w, u)
+                        n += any(abs(u - w[j]) < tol for j in (i - 1, i) if 0 <= j < len(w))
+                hits.append(n)
+            scores.append((sum(hits), min(hits), -abs(b), r, b))
+    scores.sort(reverse=True)
+    best = scores[0]
+    second = next((sc for sc in scores if sc[3] != best[3] or abs(sc[4] - best[4]) > 1.5), best)
+    typical = scores[len(scores) // 2][0]
+    clear = best[1] >= 8 and best[0] >= 1.2 * second[0] and best[0] >= 2 * max(typical, 1)
+    return best[3], best[4], clear, best[0]
+
+
+def fit_subs(candidates, windows):
+    """candidates: lists of cues, the preferred one first. Returns (chosen index, cues, note, changed?)."""
+    found = []
+    for i, cues in enumerate(candidates):
+        r, b, clear, score = match_subs([a for a, _, _ in cues], windows)
+        if clear:
+            found.append((score, -i, i, r, b))
+    if not found:
+        return 0, candidates[0], 'not checked: adjust with "earlier" / "later" if needed', False
+    _, _, i, r, b = max(found)
+    if r == 1 and abs(b) < 0.3:
+        note, cues = "checked: in sync", candidates[i]
+    else:
+        note = f"shifted by {b:+.1f} s" + (" (speed corrected)" if r != 1 else "")
+        cues = [(a * r + b, e * r + b, x) for a, e, x in candidates[i]]
+    return i, cues, note + (" — switched to a file that matches this release better" if i else ""), bool(i) or cues is not candidates[i]
+
+
+def verify_subs(live, url, track, duration, paths, memo):
+    """In the background during playback: checks the subtitles and, if a better sync stands out, restarts the stream with it."""
+    try:
+        windows = [ref_window(url, track, int(duration * f)) for f in (0.10, 0.70)]
+        if min(len(w) for w in windows) < 10:
+            note, changed, srt = "not checked: too few reference cues", False, paths[0]
+        else:
+            i, cues, note, changed = fit_subs([parse_srt(p.read_text("utf-8", "replace")) for p in paths], windows)
+            srt = paths[i]
+            if changed:
+                srt = memo.with_suffix(".srt")
+                srt.write_text(write_srt(cues), "utf-8")
+        memo.write_text(json.dumps({"srt": str(srt), "note": note}))
+        live["note"] = note
+        if changed and current() is live:
+            live["subs"], live["offset"] = srt, secs(status().get("RelTime"))
+            start_live(live)
+    except Exception as e:
+        print("subtitle check:", e, flush=True)
+
+
+def synced_subs(live, url, subs, alts=()):
+    """Picks the .srt for the `live` stream: result of a past check, else the preferred one + a background check."""
+    memo = CACHE / "subs" / ("sync-" + hashlib.sha1((url + "|" + subs).encode()).hexdigest() + ".json")
+    live["duration"], track = probe(url)
+    if memo.exists() and Path((m := json.loads(memo.read_text()))["srt"]).exists():
+        live["subs"], live["note"] = Path(m["srt"]), m["note"]
+        return
+    paths = [fetch_subs(u) for u in [subs, *list(alts)[:5]]]
+    live["subs"] = paths[0]
+    if track is None or live["duration"] < 900:
+        live["note"] = "not checked: the video file has no reference subtitles"
+    else:
+        threading.Thread(target=verify_subs, args=(live, url, track, live["duration"], paths, memo), daemon=True).start()
+
+
+def play_url(url, name, title, size=None, subs=None, poster=None, film=None, start=0, delay=0, alts=()):
+    """Plays on the TV an address the Mac can read (local TorrServer or direct link), relayed by us.
+    subs: address of a .srt to burn in → goes through the live stream (re-encoding).
+    film: movie identifier, so that track() records the position; start: resume at this second."""
+    if subs:
+        live = {"title": title, "thumbnail": poster, "offset": start, "inputs": [(url, "")], "film": film, "sub_delay": delay}
+        synced_subs(live, url, subs, alts)
+        return start_live(live)
+    mime = MIME.get(Path(name).suffix.lower(), "video/mp4")
+    src = {"proxy": url, "title": title, "mime": mime, "thumbnail": poster}
+    play_on_tv(share(src, name), title, mime, DLNA_FLAGS, f' size="{size}"' if size else "")
+    if start:
+        for _ in range(40):  # the TV can only seek once playback has started
+            if soap("AVTransport", "GetTransportInfo", I0).get("CurrentTransportState") == "PLAYING":
+                break
+            time.sleep(0.5)
+        soap("AVTransport", "Seek", f"{I0}<Unit>REL_TIME</Unit><Target>{hms(start)}</Target>")
+    src["film"] = film  # only now: track() must not record "0:03" before the resume seek
+    return {"title": title}
+
+
+def fetch_subs(url):
+    if not re.match(r"https?://", url or ""):
+        raise ValueError("invalid subtitles address")
+    out = CACHE / "subs" / (hashlib.sha1(url.encode()).hexdigest() + ".srt")
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=20) as r:
+            out.write_bytes(r.read(5 << 20))
+    return out
+
+
+def cast_torrent(link):
+    url, name, size = torrent_file(link)
+    return play_url(url, name, Path(name).stem, size)
+
+
+def play(a):
+    """Plays a source returned by a Stremio add-on: torrent (infoHash) or direct link (url)."""
+    title = str(a.get("title") or "Movie")
+    if a.get("infoHash"):
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", a["infoHash"]):
+            raise ValueError("invalid torrent identifier")
+        trackers = [s.split(":", 1)[1] for s in a.get("sources") or [] if isinstance(s, str) and s.startswith("tracker:")]
+        link = f"magnet:?xt=urn:btih:{a['infoHash']}" + "".join("&tr=" + quote(t, safe="") for t in trackers)
+        url, name, size = torrent_file(link, a.get("fileIdx"), a.get("filename"))
+    elif re.match(r"https?://", a.get("url") or ""):
+        url, name, size = a["url"], Path(urlparse(a["url"]).path).name or "film.mp4", None
+    else:
+        raise ValueError("this source is neither a torrent nor a direct link")
+    film, start = a.get("film") or {}, max(int(a.get("start") or 0), 0)
+    if film.get("id"):
+        with progress_lock:
+            old = progress.get(film["id"], {})
+            progress[film["id"]] = {"id": film["id"], "title": title, "poster": film.get("poster"),
+                                    "play": {k: a[k] for k in ("infoHash", "fileIdx", "filename", "url", "sources", "subs", "subDelay", "title", "poster") if a.get(k) is not None},
+                                    "position": start, "duration": old.get("duration", 0), "updated": int(time.time())}
+            save_progress()
+    alts = [u for u in a.get("subsAlt") or [] if isinstance(u, str) and re.match(r"https?://", u)]
+    return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film.get("id"), start, float(a.get("subDelay") or 0), alts)
+
+
+# --- Resume: playback position of the catalog movies, recorded in progress.json (single profile)
+
+PROGRESS = HERE / "progress.json"
+progress_lock = threading.Lock()
+try:
+    progress = json.loads(PROGRESS.read_text())
+except (OSError, ValueError):
+    progress = {}
+
+
+def save_progress():
+    PROGRESS.write_text(json.dumps(progress, indent=1, ensure_ascii=False))
+
+
+def track():
+    """Every 10 s, records how far the current catalog movie has got on the TV (works with the page closed)."""
+    while True:
+        time.sleep(10)
+        try:
+            src = current()
+            if not (isinstance(src, dict) and src.get("film")):
+                continue
+            s = status()
+            if next(iter(shared)) not in s.get("TrackURI", "") or s.get("CurrentTransportState") not in ("PLAYING", "PAUSED_PLAYBACK"):
+                continue
+            with progress_lock:
+                p = progress.get(src["film"])
+                if p:
+                    p.update(position=secs(s.get("RelTime")), duration=secs(s.get("TrackDuration")) or p["duration"], updated=int(time.time()))
+                    save_progress()
+        except Exception:
+            pass  # TV off or busy: we retry on the next round
+
+
+# --- Settings: list of Stremio add-ons (catalog, sources, subtitles), kept in config.json
+
+CONFIG = HERE / "config.json"
+DEFAULT_ADDONS = ["https://v3-cinemeta.strem.io", "https://opensubtitles-v3.strem.io"]  # official Stremio catalog and subtitles
+
+
+def load_config():
+    try:
+        return {"addons": DEFAULT_ADDONS, **json.loads(CONFIG.read_text())}
+    except (OSError, ValueError):
+        return {"addons": DEFAULT_ADDONS}
+
+
+def save_config(cfg):
+    CONFIG.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+
+
+def get_config():
+    return {"addons": load_config()["addons"]}
+
+
+def set_config(a):
+    addons = [re.sub(r"/manifest\.json$", "", u.strip().replace("stremio://", "https://")).rstrip("/") for u in a.get("addons") or []]
+    if not all(re.match(r"https?://", u) for u in addons):
+        raise ValueError("invalid add-on address")
+    save_config({**load_config(), "addons": list(dict.fromkeys(addons))})
+    return get_config()
+
+
+def hms(t):
+    return f"{t // 3600}:{t % 3600 // 60:02}:{t % 60:02}"
+
+
+def secs(t):
+    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(t.split(":")))) if re.fullmatch(r"[\d:]+", t or "") else 0
+
+
+def thumb():
+    """Thumbnail of the current video: poster provided by the catalog, else a frame extracted from the file by ffmpeg."""
+    p = current()
+    if not p:
+        raise LookupError
+    if isinstance(p, dict):
+        if not p.get("thumbnail"):
+            raise LookupError
+        with urllib.request.urlopen(p["thumbnail"], timeout=6) as r:
+            return r.read()
+    out = CACHE / "thumbs" / (hashlib.sha1(str(p).encode()).hexdigest() + ".jpg")
+    for ss in ("20", "0"):  # 0: videos shorter than 20 s
+        if out.exists():
+            break
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-ss", ss, "-i", str(p), "-frames:v", "1", "-vf", "scale=1280:-2", "-y", str(out)],
+                       capture_output=True, timeout=30)
+    if not out.exists():
+        raise LookupError
+    return out.read_bytes()
+
+
+def transport(action, seconds=0):
+    if action == "play":
+        return soap("AVTransport", "Play", I0 + "<Speed>1</Speed>")
+    if action in ("pause", "stop"):
+        return soap("AVTransport", action.capitalize(), I0)
+    if action == "seek":
+        t = max(int(seconds), 0)
+        live = current_live()
+        if live:
+            live["offset"] = t
+            return start_live(live)
+        return soap("AVTransport", "Seek", f"{I0}<Unit>REL_TIME</Unit><Target>{hms(t)}</Target>")
+    raise ValueError(f"unknown action: {action}")
+
+
+def youtube_id(url):
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/|live/)([\w-]{11})", url) or re.fullmatch(r"([\w-]{11})", url.strip())
+    if not m:
+        raise ValueError("unrecognized YouTube link")
+    return m[1]
+
+
+FORMAT = "bv*[vcodec^=avc1][height<=1080]+ba[ext=m4a]/bv*[vcodec^=avc1][height<=1080]+ba/b[ext=mp4]/b"  # H.264 + AAC: what the TV always plays
+
+
+def norm_link(url):
+    """Link → (address to give yt-dlp, cache key)."""
+    url = url.strip()
+    if "youtu" in url or re.fullmatch(r"[\w-]{11}", url):
+        vid = youtube_id(url)
+        return f"https://www.youtube.com/watch?v={vid}", vid
+    if re.match(r"https?://", url):
+        return url, hashlib.sha1(url.encode()).hexdigest()[:11]
+    raise ValueError("unrecognized link")
+
+
+def media_fetch(url):
+    """Downloads the video of a link into cache/ and returns the file (fallback when live streaming misbehaves)."""
+    url, vid = norm_link(url)
+    found = sorted(CACHE.glob(f"*[[]{vid}[]].mp4"))
+    if found:
+        return found[0]
+    r = subprocess.run(
+        ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
+         "-f", FORMAT,
+         "--merge-output-format", "mp4", "--postprocessor-args", "Merger:-movflags +faststart",
+         "-o", str(CACHE / f"%(title).80s [{vid}].%(ext)s"), "--", url],
+        capture_output=True, text=True, timeout=3600)
+    found = sorted(CACHE.glob(f"*[[]{vid}[]].mp4"))
+    if r.returncode or not found:
+        raise RuntimeError("yt-dlp failed: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+    return found[0]
+
+
+def list_files():
+    out = []
+    for root, dirs, files in os.walk(MEDIA_DIR):  # os.walk skips unreadable folders
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not d.endswith(".tvlibrary"))
+        for f in sorted(files):
+            p = Path(root, f)
+            if p.suffix.lower() in MIME and not f.startswith("."):
+                out.append({"path": str(p), "name": str(p.relative_to(MEDIA_DIR)), "size": p.stat().st_size})
+                if len(out) >= 2000:
+                    return out
+    return out
+
+
+def parse_range(header, size):
+    """Range header → (start, end) inclusive, None for the whole file, ValueError if out of bounds."""
+    m = re.fullmatch(r"bytes=(\d*)-(\d*)", (header or "").strip())
+    if not m or not (m[1] or m[2]):
+        return None
+    if m[1]:
+        start, end = int(m[1]), min(int(m[2]) if m[2] else size - 1, size - 1)
+    else:
+        start, end = max(size - int(m[2]), 0), size - 1
+    if start > end:
+        raise ValueError
+    return start, end
+
+
+def post_action(path, a):
+    if path == "/api/key":
+        return need_tv().press(a.get("event"))
+    if path == "/api/tv":
+        return connect_tv(str(a.get("ip", "")).strip())
+    if path == "/api/volume":
+        return soap("RenderingControl", "SetVolume", f"{I0}<Channel>Master</Channel><DesiredVolume>{min(max(int(a['value']), 0), 100)}</DesiredVolume>")
+    if path == "/api/transport":
+        return transport(a.get("action"), a.get("seconds", 0))
+    if path == "/api/cast":
+        return cast(a["path"], a.get("burn"))
+    if path == "/api/youtube":
+        return dial("YouTube", "POST", f"v={youtube_id(a['url'])}".encode())
+    if path == "/api/castlink":
+        if is_torrent(a["url"]):
+            return cast_torrent(a["url"])
+        return cast(media_fetch(a["url"])) if a.get("mode") == "download" else stream_link(a["url"])
+    if path == "/api/subdelay":
+        return sub_delay(a)
+    if path == "/api/play":
+        return play(a)
+    if path == "/api/config":
+        return set_config(a)
+    if path == "/api/app":
+        if a.get("name") not in APPS:
+            raise ValueError("unknown app")
+        if a.get("action") == "stop":
+            return dial(a["name"] + "/run", "DELETE")
+        return dial(a["name"], "POST", b"")
+    raise LookupError
+
+
+# --- HTTP -------------------------------------------------------------------
+
+LIVE_FLAGS = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+DLNA_FLAGS = "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # over HTTP/1.0 the TV does not use Range and stays stuck in TRANSITIONING
+
+    def log_message(self, *args):
+        pass
+
+    def handle(self):
+        try:
+            super().handle()
+        except ConnectionError:
+            pass  # the TV drops its connections without warning on every seek in the video
+
+    def is_local(self):
+        """Access to the interface: the Mac itself, or (with --lan) a device on the local network that presents the key."""
+        host = self.headers.get("Host", "").rsplit(":", 1)[0]  # Host checked against DNS rebinding
+        if self.client_address[0] == "127.0.0.1":
+            return host in ("127.0.0.1", "localhost")
+        cookie = re.search(r"(?:^|;\s*)tvkey=([\w-]+)", self.headers.get("Cookie", ""))
+        return bool(LAN_KEY and ipaddress.ip_address(self.client_address[0]).is_private and host.lower() in (local_ip(), *LOCAL_NAMES)
+                    and cookie and hmac.compare_digest(cookie[1], LAN_KEY))
+
+    def lan_login(self):
+        """/?key=… from the local network: sets the access cookie (1 year) and redirects to the page."""
+        m = re.search(r"[?&]key=([\w-]+)", self.path)
+        if not (LAN_KEY and m and hmac.compare_digest(m[1], LAN_KEY)):
+            return False
+        self.send_response(302)
+        self.send_header("Set-Cookie", f"tvkey={LAN_KEY}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Strict")
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return True
+
+    def reply(self, code, body, ctype="application/json; charset=utf-8"):
+        data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def run(self, fn, *args):
+        try:
+            self.reply(200, fn(*args) or {"ok": True})
+        except LookupError:
+            self.reply(404, {"error": "not found"})
+        except (ValueError, KeyError, TypeError) as e:
+            self.reply(400, {"error": str(e) or "invalid request"})
+        except Exception as e:  # TV off, timeout, SOAP fault…
+            self.reply(502, {"error": f"TV unreachable or command refused ({e})"})
+
+    def do_HEAD(self):
+        self.do_GET(head=True)
+
+    def do_GET(self, head=False):
+        if self.path.startswith("/media/"):
+            return self.media(head)
+        if not self.is_local():
+            return self.lan_login() or self.reply(403, {"error": "access denied: open the link with the key (?key=…)"})
+        if self.path.startswith("/api/thumb"):
+            try:
+                return self.reply(200, thumb(), "image/jpeg")
+            except Exception:
+                return self.reply(404, {"error": "no thumbnail"})
+        if self.path.split("?")[0] in ("/", "/index.html"):
+            return self.reply(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        routes = {
+            "/api/status": status,
+            "/api/apps": apps,
+            "/api/files": lambda: {"dir": str(MEDIA_DIR), "files": list_files()},
+            "/api/config": get_config,
+            "/api/tvs": lambda: {"tvs": tvlib.discover(), "current": current_tv.ip if current_tv else None},
+            "/api/channels": lambda: need_tv().channels(),
+            "/api/progress": lambda: {"films": sorted(progress.values(), key=lambda p: -p["updated"])},
+            "/api/info": lambda: {"tv": current_tv.info() if current_tv else None, "mac": local_ip(), "port": PORT},
+        }
+        if self.path not in routes:
+            return self.reply(404, {"error": "not found"})
+        self.run(routes[self.path])
+
+    def do_POST(self):
+        # JSON required: forces a CORS preflight (never accepted) for third-party web pages.
+        if not self.is_local() or not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self.reply(403, {"error": "local access only"})
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        try:
+            args = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return self.reply(400, {"error": "invalid JSON"})
+        self.run(post_action, self.path, args)
+
+    def media(self, head):
+        print(f"{self.log_date_time_string()} TV {self.command} {self.path.rsplit('/', 1)[-1][:40]} Range={self.headers.get('Range')}", flush=True)
+        parts = self.path.split("/")  # ["", "media", token, name]
+        p = shared.get(parts[2]) if len(parts) > 2 else None
+        if not p:
+            return self.reply(404, {"error": "not found"})
+        if isinstance(p, dict):
+            return self.live(p, head) if "inputs" in p else self.proxy(p, head)
+        size = p.stat().st_size
+        try:
+            rng = parse_range(self.headers.get("Range"), size)
+        except ValueError:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        start, end = rng or (0, size - 1)
+        self.send_response(206 if rng else 200)
+        if rng:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Type", MIME.get(p.suffix.lower(), "text/srt" if p.suffix.lower() == ".srt" else "application/octet-stream"))
+        if sub_url and p.suffix.lower() != ".srt":
+            self.send_header("CaptionInfo.sec", sub_url)
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("transferMode.dlna.org", "Streaming")
+        self.send_header("contentFeatures.dlna.org", DLNA_FLAGS)
+        self.end_headers()
+        if head:
+            return
+        with p.open("rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0 and (chunk := f.read(min(1 << 20, left))):
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the TV drops and retries with another Range when seeking
+
+    def proxy(self, src, head):
+        """Relays the TorrServer stream to the TV (with Range, so you can seek in the movie)."""
+        req = urllib.request.Request(src["proxy"], method="HEAD" if head else "GET")
+        if self.headers.get("Range"):
+            req.add_header("Range", self.headers["Range"])
+        try:
+            r = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            r = e  # 416 and the like: relayed as is
+        except OSError:
+            return self.reply(502, {"error": "torrent engine unreachable"})
+        with r:
+            self.send_response(r.status)
+            for h in ("Content-Length", "Content-Range"):
+                if r.headers.get(h):
+                    self.send_header(h, r.headers[h])
+            self.send_header("Content-Type", src["mime"])
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("transferMode.dlna.org", "Streaming")
+            self.send_header("contentFeatures.dlna.org", DLNA_FLAGS)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            if head:
+                return
+            try:
+                while chunk := r.read1(1 << 16):
+                    self.wfile.write(chunk)
+            except OSError:
+                pass  # the TV dropped, or the torrent has stalled
+
+    def live(self, live, head):
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mpeg")
+        self.send_header("transferMode.dlna.org", "Streaming")
+        self.send_header("contentFeatures.dlna.org", LIVE_FLAGS)
+        self.send_header("Connection", "close")  # unknown length: end of stream = close
+        self.end_headers()
+        if head:
+            return
+        proc = subprocess.Popen(live_cmd(live), stdout=subprocess.PIPE)  # ffmpeg errors → server.log
+        try:
+            while chunk := proc.stdout.read1(1 << 16):
+                self.wfile.write(chunk)
+        except ConnectionError:
+            pass
+        finally:
+            proc.kill()
+            proc.wait()
+
+
+def selftest():
+    tvlib.selftest()
+    assert secs("0:02:05") == 125 and secs("NOT_IMPLEMENTED") == 0 and hms(3725) == "1:02:05"
+    assert is_torrent("magnet:?xt=urn:btih:abc") and is_torrent("08ada5a7a6183aae1e09d831df6748d566095a10") and not is_torrent("https://youtu.be/x")
+    assert "setpts=PTS+(367.5)/TB" in " ".join(live_cmd({"offset": 369, "sub_delay": 1.5, "inputs": [("/a.mkv", "")], "subs": "/s.srt"}))
+    # check: a .srt shifted by -9.7 s and played at 23.976 instead of 24 frames/s must land back on the reference,
+    # and be preferred over an unrelated file, even if that one is the first choice
+    truth = [(t, t + 2, "x") for t in (7.3 * n + (n * n * 37 % 50) / 10 for n in range(800))]
+    wins = [sorted(t for t, _, _ in truth if a <= t <= a + 120) for a in (600, 4000)]
+    slow = [((t - 9.7) * 24 / 23.976, (e - 9.7) * 24 / 23.976, x) for t, e, x in truth]
+    i, fixed, note, changed = fit_subs([[(t * 1.3 + 500, e, x) for t, e, x in truth], slow], wins)
+    assert i == 1 and changed and "shifted" in note and max(abs(f[0] - t[0]) for f, t in zip(fixed, truth)) < 0.5, (i, note)
+    assert fit_subs([truth], wins)[2:] == ("checked: in sync", False)
+    assert parse_srt(write_srt(truth[:3]))[2][0] == truth[2][0]
+    assert norm_link(" https://youtu.be/dQw4w9WgXcQ ")[0] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert parse_range(None, 100) is None
+    assert parse_range("bytes=0-", 100) == (0, 99)
+    assert parse_range("bytes=10-19", 100) == (10, 19)
+    assert parse_range("bytes=90-500", 100) == (90, 99)
+    assert parse_range("bytes=-10", 100) == (90, 99)
+    try:
+        parse_range("bytes=100-", 100)
+        raise AssertionError("out-of-bounds Range accepted")
+    except ValueError:
+        pass
+    for u in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42", "https://youtu.be/dQw4w9WgXcQ?si=x",
+              "https://youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"):
+        assert youtube_id(u) == "dQw4w9WgXcQ", u
+    print("selftest ok")
+
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        selftest()
+        sys.exit()
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # so that TorrServer stops with us
+    tidy()
+    if os.path.exists("/usr/bin/caffeinate"):  # macOS: stay awake while plugged in, for as long as this server runs
+        subprocess.Popen(["/usr/bin/caffeinate", "-s", "-w", str(os.getpid())])
+    start_torrserver()
+    threading.Thread(target=track, daemon=True).start()
+    restore_tv()
+    print(f"TV: {current_tv.name + ' (' + current_tv.ip + ')' if current_tv else 'to be picked in the page'} · movies: {MEDIA_DIR}\n→ http://127.0.0.1:{PORT}", flush=True)
+    if LAN_KEY:
+        print(f"→ local network: http://{local_ip()}:{PORT}/?key={LAN_KEY}", flush=True)
+        print(f"→ or by name:    http://{LOCAL_NAMES[0]}:{PORT}/?key={LAN_KEY}", flush=True)
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
