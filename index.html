@@ -607,7 +607,8 @@ async function refresh() {
     if (tr) {
       const cell = (label, value) => { const e = document.createElement('span'), v = document.createElement('b'); v.textContent = value; e.append(label + ' ', v); return e; };
       const cells = [cell('Sources', tr.peers), cell('Download', rate(tr.speed)), cell('Needed', tr.need ? rate(tr.need) : '?'), cell('Buffered', hms(tr.ahead))];
-      if (tr.need && tr.speed < tr.need && tr.ahead < 300) {  // with minutes in hand, a slow or idle download is not a problem: once its buffer is full, the engine stops downloading
+      const left = secs(s.TrackDuration) - secs(s.RelTime);  // near the end, a short buffer is the whole rest of the movie
+      if (tr.need && tr.speed < tr.need && tr.ahead < 300 && tr.ahead < left - 10) {  // with minutes in hand, a slow or idle download is not a problem: once its buffer is full, the engine stops downloading
         const w = document.createElement('span'); w.className = 'warn';
         w.textContent = tr.ahead > 60 ? 'This source is slower than the movie: playback runs on the buffer.' : 'This source is slower than the movie: pause to let it load (grey bar), or pick another source.';
         cells.push(w);
