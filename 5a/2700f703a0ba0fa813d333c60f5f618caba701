@@ -1,0 +1,25 @@
+CLAUDE.md
+  s_5c5cbd3ca9d603::t_b6331557941328 1-18
+docs/agents/domain.md
+  s_5c5cbd3ca9d603::t_0a1d3db3b24401 1-51
+docs/agents/issue-tracker.md
+  s_5c5cbd3ca9d603::t_a88e40d5ce90d7 1-46
+docs/agents/triage-labels.md
+  s_5c5cbd3ca9d603::t_be86396141e322 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5a2700f703a0ba0fa813d333c60f5f618caba701",
+  "prompts": {},
+  "sessions": {
+    "s_5c5cbd3ca9d603": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2e3b13e-11bf-4252-a92b-8f4ef053bacd",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "Edracoon <edgar.pfennig@gmail.com>"
+    }
+  }
+}
