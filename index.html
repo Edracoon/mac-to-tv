@@ -99,8 +99,17 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 #tinfo .warn{flex-basis:100%;color:var(--accent);font-weight:600}
 #subctl button{font-size:13px;padding:5px 10px;border-radius:99px;white-space:nowrap}
 .ctl .sp{flex:1}
-#vol{width:90px;accent-color:#fff;cursor:pointer}
-#volv{font-size:12px;width:28px;text-align:right}
+/* volume: a button; the vertical slider opens above it */
+#volbox{position:relative}
+#volpop{position:absolute;bottom:44px;left:50%;transform:translateX(-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px 4px;border-radius:14px;background:#000d;backdrop-filter:blur(6px)}
+#vol{writing-mode:vertical-lr;direction:rtl;-webkit-appearance:slider-vertical;width:24px;height:clamp(64px,20vw,120px);margin:0;accent-color:#fff;cursor:pointer}
+#volv{font-size:12px}
+@media (max-width:560px){
+  /* small screen: the centre button must not sit on the seek bar */
+  #big{width:48px;height:48px;font-size:20px;top:40%}
+  .ctl button{width:36px;height:36px}
+  #time{margin:0 4px;font-size:12px}
+}
 
 /* ---- Cast ---- */
 #castbar{display:flex;gap:8px;flex-wrap:wrap}
@@ -382,9 +391,14 @@ body.hasmini #toast{bottom:76px}
         <button class="txt" data-seek="10" title="Forward 10 s (→)">+10</button>
         <span id="time" class="mono">0:00 / 0:00</span>
         <span class="sp"></span>
-        <button data-key="mute" title="Mute"><svg class="ic"><use href="#i-volume"/></svg></button>
-        <input id="vol" type="range" min="0" max="100" title="Volume">
-        <span id="volv" class="mono"></span>
+        <div id="volbox">
+          <button id="volbtn" title="Volume" aria-expanded="false"><svg class="ic"><use href="#i-volume"/></svg></button>
+          <div id="volpop" hidden>
+            <span id="volv" class="mono"></span>
+            <input id="vol" type="range" min="0" max="100" title="Volume" aria-orientation="vertical">
+            <button data-key="mute" title="Mute"><svg class="ic"><use href="#i-mute"/></svg></button>
+          </div>
+        </div>
         <button data-transport="stop" title="Stop playback"><svg class="ic"><use href="#i-stop"/></svg></button>
       </div>
     </div>
@@ -647,6 +661,8 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowLeft') { e.preventDefault(); jump(-10); }
   else if (e.key === 'ArrowRight') { e.preventDefault(); jump(10); }
 });
+$('#volbtn').addEventListener('click', () => { $('#volpop').hidden = !$('#volpop').hidden; $('#volbtn').setAttribute('aria-expanded', !$('#volpop').hidden); });
+document.addEventListener('click', e => { if (!e.target.closest('#volbox')) { $('#volpop').hidden = true; $('#volbtn').setAttribute('aria-expanded', 'false'); } });
 $('#vol').addEventListener('input', e => { voling = true; $('#volv').textContent = e.target.value; });
 $('#vol').addEventListener('change', e => { act('volume', { value: +e.target.value }); setTimeout(() => voling = false, 1500); });
 $('#seek').addEventListener('input', () => { seeking = true; paint(); });
