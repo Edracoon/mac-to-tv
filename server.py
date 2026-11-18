@@ -199,6 +199,16 @@ def restore_tv():
             pass
 
 
+def about(d):
+    """What the page shows under the player about the video: short texts only, whatever was sent."""
+    limits = {"description": 3000, "info": 300, "credits": 400, "poster": 600, "link": 600, "film": 40}
+    out = {k: str(d[k])[:n] for k, n in limits.items() if isinstance(d, dict) and d.get(k) and isinstance(d[k], (str, int))}
+    for k in ("poster", "link"):
+        if k in out and not re.match(r"https?://", out[k]):
+            del out[k]
+    return out
+
+
 def live_position(live, s=None):
     """Second of the movie a live stream is at. s: what the TV just reported, when it is known to be playing this
     stream; without it, the last position seen, and before any was seen, the point the stream was started at."""
@@ -240,6 +250,8 @@ def status():
         s["subDelay"] = live.get("sub_delay", 0)
         s["subsNote"] = live.get("note", "")
     src = current()
+    if isinstance(src, dict) and src.get("about"):
+        s["about"] = src["about"]
     if isinstance(src, dict) and src.get("torrent"):
         try:
             s["torrent"] = torrent_health(src, secs(s.get("TrackDuration")), secs(s.get("RelTime")))
@@ -400,7 +412,12 @@ def link_info(url):
         step("Waiting for the video to be released")
     time.sleep(min(max(ready - time.time() + 0.5, 0), 30))
     remember_link(url, d)
+    day = str(d.get("upload_date") or "")
+    facts = [d.get("channel") or d.get("uploader"), f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else "",
+             f"{d['view_count']:,} views".replace(",", " ") if isinstance(d.get("view_count"), int) else ""]
     return {"title": d.get("title") or "Video", "duration": int(d.get("duration") or 0), "thumbnail": d.get("thumbnail"),
+            "about": about({"description": d.get("description"), "info": " · ".join(f for f in facts if f),
+                            "poster": d.get("thumbnail"), "link": d.get("webpage_url") or url}),
             "offset": 0,
             "inputs": [(f["url"], "".join(f"{k}: {v}\r\n" for k, v in (f.get("http_headers") or {}).items()))
                        for f in d.get("requested_formats") or [d]]}
@@ -919,7 +936,7 @@ def synced_subs(live, url, subs, alts=(), track=None):
         threading.Thread(target=verify_subs, args=(live, url, track, live["duration"], paths, memo), daemon=True).start()
 
 
-def play_url(url, name, title, size=None, subs=None, poster=None, film=None, start=0, delay=0, alts=()):
+def play_url(url, name, title, size=None, subs=None, poster=None, film=None, start=0, delay=0, alts=(), facts=None):
     """Plays on the TV an address the Mac can read (local TorrServer or direct link), relayed by us.
     subs: address of a .srt to burn in → goes through the live stream (re-encoding).
     film: movie identifier, so that track() records the position; start: resume at this second."""
@@ -930,7 +947,7 @@ def play_url(url, name, title, size=None, subs=None, poster=None, film=None, sta
     convert = needs_convert(vcodec, acodec)
     if subs or convert:
         live = {"title": title, "thumbnail": poster, "offset": start, "inputs": [(url, "")], "film": film, "sub_delay": delay,
-                "duration": duration, "convert": convert, "torrent": torrent}
+                "duration": duration, "convert": convert, "torrent": torrent, "about": facts}
         if subs:
             step("Preparing subtitles")
             synced_subs(live, url, subs, alts, track)
@@ -938,7 +955,7 @@ def play_url(url, name, title, size=None, subs=None, poster=None, film=None, sta
             step("Converting for the TV", " and ".join(f"{c.upper()} {k}" for k, c in (("video", vcodec), ("audio", acodec)) if k in convert))
         return start_live(live)
     mime = MIME.get(Path(name).suffix.lower(), "video/mp4")
-    src = {"proxy": url, "title": title, "mime": mime, "thumbnail": poster, "torrent": torrent}
+    src = {"proxy": url, "title": title, "mime": mime, "thumbnail": poster, "torrent": torrent, "about": facts}
     play_on_tv(share(src, name), title, mime, DLNA_FLAGS, f' size="{size}"' if size else "")
     if start:
         step(f"Resuming at {hms(start)}")
@@ -989,7 +1006,8 @@ def play(a):
                                     "position": start, "duration": old.get("duration", 0), "updated": int(time.time())}
             save_progress()
     alts = [u for u in a.get("subsAlt") or [] if isinstance(u, str) and re.match(r"https?://", u)]
-    return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film.get("id"), start, float(a.get("subDelay") or 0), alts)
+    return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film.get("id"), start, float(a.get("subDelay") or 0), alts,
+                    about({**(a.get("about") if isinstance(a.get("about"), dict) else {}), "film": film.get("id")}))
 
 
 # --- Resume: playback position of the catalog movies, recorded in progress.json (single profile)
@@ -1470,6 +1488,8 @@ def selftest():
     launch("new", lambda: (step("new"), go.set(), th.join()))
     assert out == ["stopped"] and job["steps"] == [["new", ""]] and job["title"] == "new" and not job["busy"] and not job["error"], (out, job)
     job["steps"].clear()
+    assert about({"description": "x" * 5000, "poster": "javascript:1", "link": "https://a/b", "other": 1, "film": "tt1"}) == {"description": "x" * 3000, "link": "https://a/b", "film": "tt1"}
+    assert about(None) == {}
     # check: cues 12.3 s early against a "sound" that gets loud for 1.5 s when each line is spoken must come out as +12.3,
     # and unrelated cues must not come out as clear
     said = [[40 + 7.3 * n + (n * n * 37 % 50) / 10 + 900 * w for n in range(60)] for w in range(3)]

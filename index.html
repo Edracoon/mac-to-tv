@@ -99,6 +99,15 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 #tinfo .warn{flex-basis:100%;color:var(--accent);font-weight:600}
 #subctl button{font-size:13px;padding:5px 10px;border-radius:99px;white-space:nowrap}
 .ctl .sp{flex:1}
+/* what is playing, under the player */
+#about{display:flex;gap:16px;align-items:flex-start;margin-top:16px}
+#about>div{min-width:0;flex:1}
+#aposter{flex:none;max-width:min(200px,32%);max-height:220px;border-radius:10px;object-fit:cover;background:var(--line)}
+#atitle{margin:0 0 4px;font-size:20px;line-height:1.2}
+#adesc{margin:10px 0 0;white-space:pre-line;overflow-wrap:anywhere;max-height:11.5em;overflow:auto}
+#acredits{margin-top:8px}
+#alinks{margin-top:12px}
+#alink{color:var(--accent);font-size:14px}
 /* volume: a button; the vertical slider opens above it */
 #volbox{position:relative}
 #volpop{position:absolute;bottom:44px;left:50%;transform:translateX(-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px 4px;border-radius:14px;background:#000d;backdrop-filter:blur(6px)}
@@ -415,6 +424,19 @@ body.hasmini #toast{bottom:76px}
       <button data-sub="5" title="Subtitles 5 s later">+5 s</button>
     </div>
   </div>
+  <section id="about" hidden>
+    <img id="aposter" alt="" hidden>
+    <div>
+      <h3 id="atitle"></h3>
+      <div id="ainfo" class="muted"></div>
+      <p id="adesc"></p>
+      <div id="acredits" class="muted"></div>
+      <div class="row" id="alinks">
+        <button id="afilm" hidden>Movie page</button>
+        <a id="alink" target="_blank" rel="noopener" hidden>Open the original page</a>
+      </div>
+    </div>
+  </section>
     </div>
   </div>
 </main>
@@ -568,6 +590,23 @@ function paint() {
   $('#time').textContent = `${hms(shown)} / ${hms(dur)}`;
   updateMini();
 }
+// Under the player: what the server knows about the video (catalog movie, link), or at least its title
+let aboutKey = '';
+function paintAbout(s) {
+  const a = (s && s.about) || {}, key = s ? JSON.stringify([s.title, a]) : '';
+  if (key === aboutKey) return;
+  aboutKey = key;
+  $('#about').hidden = !s || !(s.title || a.description);
+  if (!s) return;
+  $('#atitle').textContent = s.title || '';
+  $('#ainfo').textContent = a.info || '';
+  $('#adesc').textContent = a.description || ''; $('#adesc').hidden = !a.description;
+  $('#acredits').textContent = a.credits || '';
+  $('#aposter').hidden = !a.poster; $('#aposter').src = a.poster || '';
+  $('#afilm').hidden = !a.film; $('#afilm').onclick = () => openFilm(a.film);
+  $('#alink').hidden = !a.link; $('#alink').href = a.link || '';
+  $('#alinks').hidden = !a.film && !a.link;
+}
 function updateMini() {
   const failed = !jobNow.busy && !!jobNow.error, show = document.body.dataset.view !== 'player' && (active || jobNow.busy || failed);
   $('#mini').hidden = !show;
@@ -589,6 +628,7 @@ async function refresh() {
     active = ['PLAYING', 'PAUSED_PLAYBACK', 'TRANSITIONING'].includes(state);
     $('#player').classList.toggle('idle', !active);
     $('#ptitle').textContent = s.title || 'Now playing';
+    paintAbout(active ? s : null);
     if (active && s.playing !== uri) {  // new video: new thumbnail
       uri = s.playing;
       const img = new Image(), src = '/api/thumb?' + encodeURIComponent(uri.slice(-60));
@@ -933,7 +973,7 @@ async function showFilm(id, fromUrl = {}) {
     if (!chosen) return;
     const source = chosen, { subs, alts } = pickSubs(source.filename);
     sync();  // "back" from the player returns to this page with the same choices
-    act('play', { ...source, title: meta.name, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
+    act('play', { ...source, about: { description: meta.description, info: $('#finfo').textContent, credits: $('#fcast').textContent, poster: meta.poster }, title: meta.name, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
       film: { id, poster: meta.poster }, start });
   };
   $('#fgo').onclick = () => launch(resumeAt);
