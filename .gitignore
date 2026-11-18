@@ -5,6 +5,8 @@ config.json
 progress.json
 # links played lately
 history.json
+# time played and number of videos, for the home view
+stats.json
 # local network access key (secret)
 lan-key.txt
 *.log

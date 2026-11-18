@@ -1024,16 +1024,54 @@ def save_progress():
     PROGRESS.write_text(json.dumps(progress, indent=1, ensure_ascii=False))
 
 
+# --- Figures for the home view (stats.json): seconds actually played on the TV, per kind and per day, and how many
+# different videos were played. Counted by track(), 10 s at a time: nothing to compute, a few hundred bytes to keep.
+
+STATS = HERE / "stats.json"
+try:
+    stats = json.loads(STATS.read_text())
+except (OSError, ValueError):
+    stats = {}
+last_counted = None
+
+
+def count_playback(src, title, tick=10):
+    global last_counted
+    facts = src if isinstance(src, dict) else {}
+    kind = "movies" if facts.get("film") else "links" if (facts.get("about") or {}).get("link") else "other"
+    for group, key in (("seconds", kind), ("days", time.strftime("%Y-%m-%d"))):
+        stats.setdefault(group, {})[key] = stats.get(group, {}).get(key, 0) + tick
+    for day in sorted(stats["days"])[:-60]:  # two months of daily figures are enough for "last 7 days"
+        del stats["days"][day]
+    if (kind, title) != last_counted:  # another video than 10 s ago (a server restart counts it again)
+        last_counted = (kind, title)
+        stats.setdefault("plays", {})[kind] = stats.get("plays", {}).get(kind, 0) + 1
+    STATS.write_text(json.dumps(stats, indent=1))
+
+
+def stats_summary(st, today):
+    """today: time.time(). Totals in seconds; week: the last 7 days, today included."""
+    recent = {time.strftime("%Y-%m-%d", time.localtime(today - 86400 * n)) for n in range(7)}
+    return {"seconds": sum((st.get("seconds") or {}).values()), "by": st.get("seconds") or {}, "plays": st.get("plays") or {},
+            "week": sum(v for d, v in (st.get("days") or {}).items() if d in recent)}
+
+
 def track():
-    """Every 10 s, records how far the current catalog movie has got on the TV (works with the page closed)."""
+    """Every 10 s, while the TV plays what we serve: counts the time played, and for a catalog movie records how
+    far it has got (works with the page closed)."""
     while True:
         time.sleep(10)
         try:
             src = current()
-            if not (isinstance(src, dict) and src.get("film")):
+            if src is None:
                 continue
             s = status()
-            if next(iter(shared)) not in s.get("TrackURI", "") or s.get("CurrentTransportState") not in ("PLAYING", "PAUSED_PLAYBACK"):
+            state = s.get("CurrentTransportState")
+            if next(iter(shared)) not in s.get("TrackURI", "") or state not in ("PLAYING", "PAUSED_PLAYBACK"):
+                continue
+            if state == "PLAYING":
+                count_playback(src, s.get("title"))
+            if not (isinstance(src, dict) and src.get("film")):
                 continue
             with progress_lock:
                 p = progress.get(src["film"])
@@ -1308,6 +1346,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.run(yt_search, (parse_qs(urlparse(self.path).query).get("q") or [""])[0])
         routes = {
             "/api/history": lambda: {"links": link_history()},
+            "/api/stats": lambda: stats_summary(stats, time.time()),
             "/api/status": public_status,
             "/api/apps": apps,
             "/api/files": lambda: {"dir": str(MEDIA_DIR), "files": list_files()},
@@ -1490,6 +1529,9 @@ def selftest():
     job["steps"].clear()
     assert about({"description": "x" * 5000, "poster": "javascript:1", "link": "https://a/b", "other": 1, "film": "tt1"}) == {"description": "x" * 3000, "link": "https://a/b", "film": "tt1"}
     assert about(None) == {}
+    day = lambda n: time.strftime("%Y-%m-%d", time.localtime(1e9 - 86400 * n))
+    assert stats_summary({"seconds": {"movies": 50, "links": 20}, "days": {day(0): 30, day(6): 20, day(7): 20}, "plays": {"links": 3}}, 1e9) \
+        == {"seconds": 70, "by": {"movies": 50, "links": 20}, "plays": {"links": 3}, "week": 50}
     # check: cues 12.3 s early against a "sound" that gets loud for 1.5 s when each line is spoken must come out as +12.3,
     # and unrelated cues must not come out as clear
     said = [[40 + 7.3 * n + (n * n * 37 % 50) / 10 + 900 * w for n in range(60)] for w in range(3)]
