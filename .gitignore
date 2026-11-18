@@ -3,6 +3,8 @@
 config.json
 # movies started and playback position
 progress.json
+# links played lately
+history.json
 # local network access key (secret)
 lan-key.txt
 *.log

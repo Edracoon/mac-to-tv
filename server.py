@@ -25,6 +25,7 @@ import hmac
 import html
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 import re
@@ -40,7 +41,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import tv as tvlib
 
@@ -78,10 +79,17 @@ if "--lan" in sys.argv:
 # What the player area of the page shows besides the TV's own state:
 #   busy/title/steps : a launch in progress and the stages it went through, each [label, detail]
 #   error/detail     : why the last playback failed, in plain words, plus the technical line for the curious
-job = {"busy": False, "title": "", "steps": [], "error": "", "detail": "", "stopped": False}
+job = {"busy": False, "title": "", "steps": [], "error": "", "detail": "", "stopped": False, "id": 0}
+mine = threading.local()  # .id: the launch this thread is running
+
+
+class Superseded(Exception):
+    """This launch was replaced by a newer one: it must stop instead of writing its stages into, or playing over, the new one."""
 
 
 def step(label, detail=""):
+    if getattr(mine, "id", job["id"]) != job["id"]:
+        raise Superseded("replaced by a newer launch")
     if job["steps"] and job["steps"][-1][0] == label:
         job["steps"][-1][1] = detail
     else:
@@ -110,23 +118,28 @@ def plain_error(e):
 
 def launch(title, fn, *args):
     """Runs a launch (link, file, torrent, catalog movie), publishing its stages and how it failed, if it did."""
-    job.update(busy=True, title=str(title)[:120], steps=[], error="", detail="", stopped=False)
+    mine.id = job["id"] + 1
+    job.update(busy=True, title=str(title)[:120], steps=[], error="", detail="", stopped=False, id=mine.id)
     try:
         return fn(*args)
     except Exception as e:
-        fail(*plain_error(e))
+        if mine.id == job["id"] and not isinstance(e, Superseded):
+            fail(*plain_error(e))
         raise
     finally:
-        job["busy"] = False
-        only_torrent(keep=current_torrent())  # whatever happened, nothing else keeps downloading
+        if mine.id == job["id"]:  # a replaced launch leaves the player, and the torrent, to its successor
+            job["busy"] = False
+            only_torrent(keep=current_torrent())  # whatever happened, nothing else keeps downloading
+        del mine.id
 
 
 def watch_start(token):
     """A few seconds after a launch: if the TV is already stopped without having been asked to, say so.
     Typical cause: a video or audio format the TV cannot decode."""
+    launched = job["id"]
     time.sleep(12)
     try:
-        if token in shared and not job["stopped"] and not job["error"]:
+        if launched == job["id"] and not job["busy"] and token in shared and not job["stopped"] and not job["error"]:
             state = soap("AVTransport", "GetTransportInfo", I0).get("CurrentTransportState")
             if state in ("STOPPED", "NO_MEDIA_PRESENT"):
                 fail("The TV stopped right away. It probably cannot play this format.")
@@ -186,6 +199,14 @@ def restore_tv():
             pass
 
 
+def live_position(live, s=None):
+    """Second of the movie a live stream is at. s: what the TV just reported, when it is known to be playing this
+    stream; without it, the last position seen, and before any was seen, the point the stream was started at."""
+    if s is not None and next(iter(shared), "\0") in s.get("TrackURI", ""):
+        live["pos"] = secs(s.get("RelTime")) + live["offset"]
+    return live.get("pos", live["offset"])
+
+
 def status():
     s = {}
     s |= soap("RenderingControl", "GetVolume", I0 + "<Channel>Master</Channel>")
@@ -195,14 +216,29 @@ def status():
     m = re.search(r"<dc:title>(.*?)</dc:title>", html.unescape(s.pop("TrackMetaData", "")))
     s["title"] = html.unescape(m[1]) if m else ""
     live = current_live()
-    if live and next(iter(shared)) in s.get("TrackURI", ""):
+    if live and next(iter(shared)) not in s.get("TrackURI", ""):
+        # The stream was just (re)started and the TV has not switched to it yet: what it reports belongs to the
+        # previous stream (or is 0). Reading that as the position sent the movie back to its start.
+        s["RelTime"] = hms(live_position(live, s))
+        s["TrackDuration"] = hms(live.get("duration") or 0)
+        s["title"] = live["title"]
+    elif live:
         # the TV counts from the start of the stream and does not know its duration
-        s["RelTime"] = hms(secs(s.get("RelTime")) + live["offset"])
+        if not live.get("duration") and not live.get("probing") and live.get("inputs"):
+            # the format check at launch failed (torrent too slow at that moment): without a duration there is no
+            # seek bar, no buffer and no "needed" speed, so ask again now that the file is being read
+            live["probing"] = True
+            def reprobe():
+                live["duration"] = probe(live["inputs"][0][0])[0]
+                time.sleep(30)  # still unknown: try again later, not at every status request
+                live["probing"] = False
+            threading.Thread(target=reprobe, daemon=True).start()
+        s["RelTime"] = hms(live_position(live, s))
         s["TrackDuration"] = hms(live["duration"])
         s["title"] = live["title"]
-        if live.get("subs"):
-            s["subDelay"] = live.get("sub_delay", 0)
-            s["subsNote"] = live.get("note", "")
+    if live and live.get("subs"):
+        s["subDelay"] = live.get("sub_delay", 0)
+        s["subsNote"] = live.get("note", "")
     src = current()
     if isinstance(src, dict) and src.get("torrent"):
         try:
@@ -313,6 +349,43 @@ def cast(path, burn=None):
 
 # --- Live stream: yt-dlp provides the addresses, ffmpeg muxes picture + sound on the fly (without re-encoding)
 
+# --- Links: the videos played lately (history.json) and YouTube search, for the "YouTube" tab of the page
+
+HISTORY = HERE / "history.json"
+history_lock = threading.Lock()
+
+
+def link_history():
+    try:
+        return json.loads(HISTORY.read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def history_entry(url, d):
+    return {"url": url, "title": d.get("title") or "Video", "channel": d.get("channel") or d.get("uploader") or "",
+            "duration": int(d.get("duration") or 0), "thumbnail": d.get("thumbnail") or ""}
+
+
+def remember_link(url, d, keep=40):
+    """Puts the link at the top of the history; a link played again moves up instead of appearing twice."""
+    with history_lock:
+        rest = [h for h in link_history() if h.get("url") != url]
+        HISTORY.write_text(json.dumps([history_entry(url, d) | {"played": int(time.time())}, *rest][:keep], indent=1, ensure_ascii=False))
+
+
+def yt_search(q, n=18):
+    q = " ".join(str(q).split())[:200]
+    if not q:
+        raise ValueError("empty search")
+    r = subprocess.run(["yt-dlp", "--flat-playlist", "--quiet", "--no-warnings", "-J", "--", f"ytsearch{n}:{q}"],
+                       capture_output=True, text=True, timeout=45)
+    if r.returncode:
+        raise ValueError("YouTube search failed: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+    return {"results": [history_entry(f"https://www.youtube.com/watch?v={e['id']}", e | {"thumbnail": f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg"})
+                        for e in json.loads(r.stdout).get("entries") or [] if e.get("id")]}
+
+
 def link_info(url):
     url, _ = norm_link(url)
     step("Reading the link")
@@ -326,6 +399,7 @@ def link_info(url):
     if ready > time.time():
         step("Waiting for the video to be released")
     time.sleep(min(max(ready - time.time() + 0.5, 0), 30))
+    remember_link(url, d)
     return {"title": d.get("title") or "Video", "duration": int(d.get("duration") or 0), "thumbnail": d.get("thumbnail"),
             "offset": 0,
             "inputs": [(f["url"], "".join(f"{k}: {v}\r\n" for k, v in (f.get("http_headers") or {}).items()))
@@ -341,6 +415,10 @@ def live_cmd(live):
     for u, headers in live["inputs"]:
         if u.startswith("http"):
             cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-headers", headers]
+            if not u.startswith(TS):
+                # YouTube throttles a video asked for in one request to about its playback speed (measured: 240 s of
+                # 1080p60 not delivered in 100 s, against 5 s in 10 MB requests), which stutters on busy scenes
+                cmd += ["-request_size", "10M"]
         if live["offset"]:
             cmd += ["-ss", str(live["offset"])]
         cmd += ["-i", u]
@@ -363,6 +441,7 @@ def live_cmd(live):
 
 def start_live(live):
     """(Re)starts the stream on the TV at live["offset"]: a stream has no middle, seeking = restarting from there."""
+    live["pos"] = live["offset"]  # until the TV plays the new stream, this is where we are
     play_on_tv(share(live, "stream.ts"), live["title"], "video/mpeg", LIVE_FLAGS)
     return {"title": live["title"]}
 
@@ -505,6 +584,14 @@ def torrent_file(link, file_idx=None, filename=None):
     return f"{TS}/stream/{quote(name)}?link={h}&index={f['id']}&play", name, f["length"]
 
 
+def current_position(live):
+    try:
+        status()  # refreshes live["pos"] when the TV is playing this stream
+    except Exception:
+        pass  # TV busy restarting: the last position seen stays valid
+    return live_position(live)
+
+
 def sub_delay(a):
     """Shifts the burned-in subtitles by a["delta"] seconds (positive = later): the stream restarts at the same spot.
     The subtitle file does not always match the release of the movie; the shift is remembered for resume."""
@@ -512,7 +599,7 @@ def sub_delay(a):
     if not (live and live.get("subs")):
         raise ValueError("no burned-in subtitles currently playing")
     live["sub_delay"] = round(min(max(live.get("sub_delay", 0) + float(a["delta"]), -120), 120), 1)
-    live["offset"] = secs(status().get("RelTime"))
+    live["offset"] = current_position(live)
     with progress_lock:
         p = progress.get(live.get("film"))
         if p:
@@ -579,7 +666,9 @@ def ref_window(url, track, start, length=120, patience=90, alive=lambda: True):
     This part of the movie has to be read (torrent speed: ~25 s in 4K, a few seconds in 1080p). ffmpeg does not stop
     by itself on a subtitle track: we read its output as it comes and kill it as soon as the excerpt is complete,
     after `patience` seconds, or as soon as `alive()` says the result is no longer wanted."""
-    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", str(start), "-i", url, "-map", f"0:s:{track}",
+    # -copyts: without it the times count from the key frame ffmpeg actually seeked to, up to a few seconds before
+    # `start` (measured: 0, 0.6 and 2.8 s late on three excerpts of one movie), and the check corrected towards that
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", str(start), "-copyts", "-i", url, "-map", f"0:s:{track}",
                              "-c:s", "srt", "-flush_packets", "1", "-f", "srt", "pipe:1"], stdout=subprocess.PIPE)
     deadline = time.time() + patience
 
@@ -594,12 +683,113 @@ def ref_window(url, track, start, length=120, patience=90, alive=lambda: True):
         while chunk := proc.stdout.read1(4096):
             text += chunk.decode("utf-8", "replace")
             cues = parse_srt(text)
-            if cues and cues[-1][0] >= length:
+            if cues and cues[-1][0] >= start + length:
                 break
     finally:
         proc.kill()
         proc.wait()
-    return sorted(start + a for a, _, _ in parse_srt(text) if a < length)
+    return sorted(a for a, _, _ in parse_srt(text) if start <= a < start + length)
+
+
+# --- Without a reference track: match the subtitles to the sound of the movie ---
+# People start talking when a subtitle appears: the speech band gets louder right at the start of a cue. We read
+# the sound of the three stretches where the file has most cues and look for the shift at which that holds best.
+# Measured on two movies: the right shift stands 7 to 10 deviations above the others in each stretch, the next
+# candidate under 3. We only act when the three stretches agree.
+
+def loudness(url, start, length, alive=lambda: True):
+    """Loudness of the speech band from `start`, one value per 100 ms, standardized over the excerpt; [] if unreadable."""
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-ss", str(start), "-t", str(length), "-i", url, "-vn", "-sn", "-ac", "1",
+                             "-af", "highpass=f=200,lowpass=f=3500", "-ar", "4000", "-f", "s16le", "pipe:1"], stdout=subprocess.PIPE)
+    deadline = time.time() + 300
+
+    def watchdog():
+        while proc.poll() is None:
+            if time.time() > deadline or not alive():
+                proc.kill()
+            time.sleep(1)
+    threading.Thread(target=watchdog, daemon=True).start()
+    raw = proc.stdout.read()
+    proc.wait()
+    pcm = memoryview(raw[:len(raw) // 800 * 800]).cast("h")
+    e = [math.log10(1 + math.sqrt(sum(x * x for x in pcm[i:i + 400]) / 400)) for i in range(0, len(pcm), 400)]
+    if len(e) < length * 5:  # less than half of the excerpt came through
+        return []
+    mean = sum(e) / len(e)
+    dev = math.sqrt(sum((x - mean) ** 2 for x in e) / len(e)) or 1
+    return [(x - mean) / dev for x in e]
+
+
+def dense_stretches(starts, duration, length=480, apart=900, n=3, least=15):
+    """Starts of the n stretches of `length` seconds holding most cues, at least `apart` seconds from each other."""
+    counts = sorted(((bisect.bisect_left(starts, t + length) - bisect.bisect_left(starts, t), t)
+                     for t in range(0, max(int(duration) - length, 1), 60)), reverse=True)
+    picks = []
+    for count, t in counts:
+        if count >= least and all(abs(t - p) >= apart for p in picks):
+            picks.append(t)
+    return sorted(picks[:n])
+
+
+def sound_shift(starts, excerpts, reach=60):
+    """excerpts: [(second it starts at, loudness)]. Returns (shift b such that the cues at starts + b fall where
+    speech begins, clear?) — clear: one shift stands out overall and each excerpt, taken alone, points to it."""
+    def peak(scores):
+        mean = sum(scores) / len(scores)
+        dev = math.sqrt(sum((x - mean) ** 2 for x in scores) / len(scores)) or 1
+        k = max(range(len(scores)), key=scores.__getitem__)
+        rest = max((x for j, x in enumerate(scores) if abs(j - k) > 20), default=mean)  # best one more than 2 s away
+        return k, (scores[k] - mean) / dev, (rest - mean) / dev
+    per = []
+    for start, z in excerpts:
+        pre = [0.0]
+        for x in z:
+            pre.append(pre[-1] + x)
+        near = [a for a in starts if start - reach - 1 <= a <= start + len(z) / 10 + reach + 1]
+        scores = []
+        for k in range(-reach * 10, reach * 10 + 1):
+            tot = 0.0
+            for a in near:
+                i = int((a - start) * 10) + k
+                if 8 <= i <= len(z) - 8:
+                    tot += pre[i + 8] - 2 * pre[i] + pre[i - 8]  # the 0.8 s after the cue starts, minus the 0.8 s before
+            scores.append(tot)
+        per.append(scores)
+    if not per:
+        return 0.0, False
+    k, z, z2 = peak([sum(col) for col in zip(*per)])
+    alone = [peak(s) for s in per]
+    clear = len(per) >= 2 and z >= 6 and z2 <= 0.6 * z and all(abs(k1 - k) <= 7 and z1 >= 5 for k1, z1, _ in alone)
+    return (k - reach * 10) / 10, clear
+
+
+def fit_by_sound(url, duration, candidates, alive=lambda: True):
+    """Same contract as fit_subs, for a video file without a reference track.
+    ponytail: shift only. A file timed for another frame rate drifts, so its stretches disagree and nothing is
+    changed; fit a speed across the stretches if such files turn out to be common."""
+    starts = [a for a, _, _ in candidates[0]]
+    excerpts = []
+    for t in dense_stretches(starts, duration):
+        z = loudness(url, max(t - 60, 0), 600, alive)
+        if not alive():
+            return 0, candidates[0], "", False
+        if z:
+            excerpts.append((max(t - 60, 0), z))
+    if len(excerpts) < 2:
+        return 0, candidates[0], 'not checked: the sound could not be read. Adjust with the buttons if needed', False
+    found = []
+    for i, cues in enumerate(candidates):
+        b, clear = sound_shift([a for a, _, _ in cues], excerpts)
+        if clear:
+            found.append((-abs(b), -i, i, b))  # between files that fit, the one that needs the smallest shift
+    if not found:
+        return 0, candidates[0], 'not checked: the sound gives no clear answer. Adjust with the buttons if needed', False
+    _, _, i, b = max(found)
+    if abs(b) < 0.3:
+        note, cues = "checked against the sound: in sync", candidates[i]
+    else:
+        note, cues = f"shifted by {b:+.1f} s to match the sound", [(a + b, e + b, x) for a, e, x in candidates[i]]
+    return i, cues, note + (" — switched to a file that matches this release better" if i else ""), bool(i) or cues is not candidates[i]
 
 
 SPEEDS = (1, 24 / 23.976, 23.976 / 24, 25 / 23.976, 23.976 / 25, 25 / 24, 24 / 25)
@@ -638,7 +828,7 @@ def fit_subs(candidates, windows):
         if clear:
             found.append((score, -i, i, r, b))
     if not found:
-        return 0, candidates[0], 'not checked: adjust with "earlier" / "later" if needed', False
+        return 0, candidates[0], 'not checked: adjust with the buttons if needed', False
     _, _, i, r, b = max(found)
     if r == 1 and abs(b) < 0.3:
         note, cues = "checked: in sync", candidates[i]
@@ -684,15 +874,18 @@ def verify_subs(live, url, track, duration, paths, memo):
         if live.get("torrent"):
             h = torrent_health(live, duration)
             if h["speed"] < 2.5 * h["need"]:
-                live["note"] = 'not checked: the source is too slow to check while playing. Adjust with "earlier" / "later" if needed'
+                live["note"] = 'not checked: the source is too slow to check while playing. Adjust with the buttons if needed'
                 return
-        windows = [ref_window(url, track, int(duration * f), alive=alive) for f in (0.10, 0.70)]
+        candidates = [parse_srt(p.read_text("utf-8", "replace")) for p in paths]
+        windows = [ref_window(url, track, int(duration * f), alive=alive) for f in (0.10, 0.70)] if track is not None else []
         if not alive():
             return
-        if min(len(w) for w in windows) < 10:
+        if track is not None and min(len(w) for w in windows) < 10:
             note, changed, srt = "not checked: too few reference cues", False, paths[0]
         else:
-            i, cues, note, changed = fit_subs([parse_srt(p.read_text("utf-8", "replace")) for p in paths], windows)
+            i, cues, note, changed = fit_subs(candidates, windows) if track is not None else fit_by_sound(url, duration, candidates, alive)
+            if not alive():
+                return
             srt = paths[i]
             if changed:
                 srt = memo.with_suffix(".srt")
@@ -700,7 +893,13 @@ def verify_subs(live, url, track, duration, paths, memo):
         memo.write_text(json.dumps({"srt": str(srt), "note": note}))
         live["note"] = note
         if changed and alive():
-            live["subs"], live["offset"] = srt, secs(status().get("RelTime"))
+            live["subs"], live["offset"] = srt, current_position(live)
+            live["sub_delay"] = 0  # a delay set by hand was for the uncorrected file
+            with progress_lock:
+                p = progress.get(live.get("film"))
+                if p:
+                    p["play"]["subDelay"] = 0
+                    save_progress()
             start_live(live)
     except Exception as e:
         print("subtitle check:", e, flush=True)
@@ -714,8 +913,8 @@ def synced_subs(live, url, subs, alts=(), track=None):
         return
     paths = [fetch_subs(u) for u in [subs, *list(alts)[:5]]]
     live["subs"] = paths[0]
-    if track is None or live["duration"] < 900:
-        live["note"] = "not checked: the video file has no reference subtitles"
+    if live["duration"] < 900:
+        live["note"] = "not checked: the movie is too short, or its duration is unknown"
     else:
         threading.Thread(target=verify_subs, args=(live, url, track, live["duration"], paths, memo), daemon=True).start()
 
@@ -1087,7 +1286,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404, {"error": "no thumbnail"})
         if self.path.split("?")[0] in ("/", "/index.html"):
             return self.reply(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if self.path.startswith("/api/ytsearch?"):
+            return self.run(yt_search, (parse_qs(urlparse(self.path).query).get("q") or [""])[0])
         routes = {
+            "/api/history": lambda: {"links": link_history()},
             "/api/status": public_status,
             "/api/apps": apps,
             "/api/files": lambda: {"dir": str(MEDIA_DIR), "files": list_files()},
@@ -1241,6 +1443,8 @@ def selftest():
     assert not is_torrent("/Users/x/a.torrent") and is_torrent("https://example.org/a.torrent")
     assert needs_convert("av1", "dts") == ["video", "audio"] and needs_convert("hevc", "dts") == ["audio"] and needs_convert("h264", "aac") == []
     assert needs_convert("", "") == []  # unknown format: leave it alone
+    assert "-request_size 10M" in " ".join(live_cmd({"offset": 0, "inputs": [("https://x/v", "")]}))
+    assert "-request_size" not in live_cmd({"offset": 0, "inputs": [(TS + "/stream/x", "")]})
     assert "-c:v copy -c:a aac" in " ".join(live_cmd({"offset": 0, "inputs": [("/a.mkv", "")], "convert": ["audio"]}))
     assert stream_error("") == ("The video source stopped responding.", "")
     assert stream_error("[in#0/hls @ 0x1] Error during demuxing: Input/output error")[1] == "Error during demuxing: Input/output error"
@@ -1250,6 +1454,44 @@ def selftest():
     step("a"); step("b", "1"); step("b", "2")
     assert job["steps"] == [["a", ""], ["b", "2"]]
     job["steps"].clear()
+    # check: a launch replaced by a newer one stops at its next stage and leaves the newer one's stages alone
+    globals()["only_torrent"] = lambda keep=None: None  # the test must not drop the torrents of a server that is running
+    go, out = threading.Event(), []
+    def old_launch():
+        step("old"); go.wait(5); step("old, later")
+    def run_old():
+        try:
+            launch("old", old_launch)
+        except Superseded:
+            out.append("stopped")
+    th = threading.Thread(target=run_old); th.start()
+    while job["steps"] != [["old", ""]]:
+        time.sleep(0.01)
+    launch("new", lambda: (step("new"), go.set(), th.join()))
+    assert out == ["stopped"] and job["steps"] == [["new", ""]] and job["title"] == "new" and not job["busy"] and not job["error"], (out, job)
+    job["steps"].clear()
+    # check: cues 12.3 s early against a "sound" that gets loud for 1.5 s when each line is spoken must come out as +12.3,
+    # and unrelated cues must not come out as clear
+    said = [[40 + 7.3 * n + (n * n * 37 % 50) / 10 + 900 * w for n in range(60)] for w in range(3)]
+    def heard(lines, start, length=600):
+        z = [-0.4 + ((i * 7919) % 13) / 40 for i in range(length * 10)]
+        for t0 in lines:
+            for i in range(int((t0 - start) * 10), int((t0 - start + 1.5) * 10)):
+                if 0 <= i < len(z):
+                    z[i] = 1.6
+        return z
+    excerpts = [(900 * w, heard(lines, 900 * w)) for w, lines in enumerate(said)]
+    assert sound_shift([t0 - 12.3 for lines in said for t0 in lines], excerpts) == (12.3, True)
+    assert not sound_shift([11.7 * n for n in range(240)], excerpts)[1]
+    assert dense_stretches(sorted(t0 for lines in said for t0 in lines), 3000) == [0, 900, 1800]
+    # check: while the TV has not switched to a restarted stream, the position is the restart point, not the TV's counter
+    lv = {"offset": 1200}
+    shared.clear(); shared["tok"] = lv
+    assert live_position(lv) == 1200
+    assert live_position(lv, {"TrackURI": "http://mac/media/old/stream.ts", "RelTime": "0:00:03"}) == 1200
+    assert live_position(lv, {"TrackURI": "http://mac/media/tok/stream.ts", "RelTime": "0:00:30"}) == 1230 and live_position(lv) == 1230
+    shared.clear()
+    assert history_entry("u", {"title": "T", "uploader": "C", "duration": 61.4}) == {"url": "u", "title": "T", "channel": "C", "duration": 61, "thumbnail": ""}
     tvlib.selftest()
     assert secs("0:02:05") == 125 and secs("NOT_IMPLEMENTED") == 0 and hms(3725) == "1:02:05"
     assert is_torrent("magnet:?xt=urn:btih:abc") and is_torrent("08ada5a7a6183aae1e09d831df6748d566095a10") and not is_torrent("https://youtu.be/x")
