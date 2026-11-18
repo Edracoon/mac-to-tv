@@ -49,9 +49,28 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 #idle{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;color:#bbb;padding:24px;font-size:16px}
 #player.idle #idle{display:flex}
 #player.idle #big,#player.idle #bar,#player.idle #ptitle{display:none}
+/* launch in progress / playback failed: shown over the player, whatever its state */
+.over{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:#0b0b0ce6;backdrop-filter:blur(6px)}
+#player.covered #idle,#player.covered #big{display:none}
+.spin{width:44px;height:44px;border-radius:50%;border:3px solid #fff3;border-top-color:#fff;animation:spin .9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:3s}}
+#pltitle{font-size:18px;font-weight:600;max-width:90%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#psteps{list-style:none;margin:0;padding:0;columns:auto;font-size:15px;text-align:left;display:grid;gap:6px}
+#psteps li{display:flex;align-items:center;gap:10px;color:#fff9}
+#psteps li.now{color:#fff;font-weight:600}
+#psteps li small{font-weight:400;color:#fff9}
+#psteps .ic{color:var(--ok)}
+#psteps .spin{width:15px;height:15px;border-width:2px;margin:0 2px}
+#pfail .ic.big{width:44px;height:44px;color:var(--accent)}
+#pfmsg{font-size:17px;font-weight:600;max-width:520px}
+#pwhy{margin:0;max-width:560px;font-size:13px;color:#fff9}
+#pwhy summary{color:#fff9}
+#pwhy code{display:block;margin-top:6px;white-space:pre-wrap;word-break:break-word;font-size:12px}
+#pfail button:not(.primary){background:#fff2;border-color:transparent;color:#fff}
 #bar{position:absolute;left:0;right:0;bottom:0;padding:0 14px 8px}
 #seek{display:block;width:100%;height:16px;margin:0;appearance:none;-webkit-appearance:none;background:transparent;cursor:pointer}
-#seek::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(to right,var(--accent) var(--p,0%),#fff5 var(--p,0%))}
+#seek::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(to right,var(--accent) var(--p,0%),#fffc var(--p,0%),#fffc var(--b,0%),#fff4 var(--b,0%))}
 #seek:hover::-webkit-slider-runnable-track{height:6px}
 #seek::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);margin-top:-5px;opacity:0;transition:opacity .15s}
 #seek:hover::-webkit-slider-thumb{opacity:1;margin-top:-4px}
@@ -65,6 +84,9 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 #time{font-size:13px;margin:0 8px}
 #subctl{display:flex;align-items:center;gap:6px;font-size:13px;padding:2px 4px 6px}
 #subctl[hidden]{display:none}
+#tinfo{display:flex;flex-wrap:wrap;gap:4px 18px;margin:10px 2px 0;font-size:13px;color:var(--muted)}
+#tinfo b{color:var(--fg);font-weight:600}
+#tinfo .warn{flex-basis:100%;color:var(--accent);font-weight:600}
 #subctl button{background:#fff2;border:0;color:#fff;font-size:13px;padding:5px 10px;border-radius:99px}
 #subctl button:hover{background:#fff4}
 .ctl .sp{flex:1}
@@ -124,6 +146,12 @@ dialog::backdrop{background:#000b}
 /* ---- Remote ---- */
 #fab{position:fixed;right:18px;bottom:18px;width:58px;height:58px;border-radius:50%;border:0;padding:0;background:var(--accent);color:#fff;box-shadow:0 6px 18px #0006;z-index:5;display:grid;place-items:center}
 #fab:hover{filter:brightness(1.1)}
+#qrfab{position:fixed;right:88px;bottom:23px;width:48px;height:48px;border-radius:50%;padding:0;background:var(--card);box-shadow:0 6px 18px #0006;z-index:5;display:grid;place-items:center}
+#qrdlg{width:min(380px,calc(100% - 24px))}
+#qrdlg .in{padding:22px;position:relative;text-align:center}
+#qrdlg h3{margin:0 0 4px;font-size:18px}
+#qrimg{width:100%;max-width:300px;aspect-ratio:1;border-radius:12px;margin:14px auto 12px;display:block;background:#fff}
+#qrlink{display:block;font-size:13px;word-break:break-all;user-select:all;margin-bottom:12px}
 #remotedlg{width:min(280px,calc(100% - 24px));background:none;border-radius:28px;margin:auto 18px 88px auto;max-height:calc(100vh - 112px);max-height:calc(100dvh - 112px);overflow-y:auto}
 @media (max-width:560px){#remotedlg{margin:auto;max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px)}
   #remote{gap:12px;padding:16px}}
@@ -154,6 +182,8 @@ dialog::backdrop{background:#000b}
   <symbol id="i-mute" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></symbol>
   <symbol id="i-power" viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
 </defs></svg>
 <main>
@@ -166,6 +196,20 @@ dialog::backdrop{background:#000b}
   <div id="player" class="idle">
     <div id="ptitle"></div>
     <div id="idle">Nothing playing.<br>Paste a link below or pick a movie.</div>
+    <div id="pload" class="over" hidden>
+      <div class="spin"></div>
+      <div id="pltitle"></div>
+      <ol id="psteps"></ol>
+    </div>
+    <div id="pfail" class="over" hidden>
+      <svg class="ic big"><use href="#i-warn"/></svg>
+      <div id="pfmsg"></div>
+      <details id="pwhy"><summary>Technical details</summary><code id="pdetail"></code></details>
+      <div class="row">
+        <button class="primary" id="pretry">Try again</button>
+        <button id="pdismiss">Dismiss</button>
+      </div>
+    </div>
     <button id="big" title="Play / pause (space)"><svg class="ic"><use href="#i-play"/></svg></button>
     <div id="bar">
       <input id="seek" type="range" min="0" max="1" value="0" title="Seek through the video">
@@ -188,6 +232,8 @@ dialog::backdrop{background:#000b}
       </div>
     </div>
   </div>
+
+  <div id="tinfo" hidden></div>
 
   <form id="castbar">
     <input id="link" type="text" placeholder="Paste a link: YouTube, Arte, Vimeo… or a magnet link (torrent)">
@@ -228,10 +274,6 @@ dialog::backdrop{background:#000b}
         <span id="dir" class="muted"></span>
       </div>
       <ul id="files"><li><span class="muted">Loading…</span></li></ul>
-      <form class="row" id="pathform" style="margin-top:12px">
-        <input id="path" type="text" placeholder="Or a full path: /Users/…/movie.mkv">
-        <button>Cast this file</button>
-      </form>
       <details id="chbox" hidden>
         <summary>TV channels <span id="nch"></span> — read-only</summary>
         <ol id="channels"></ol>
@@ -243,6 +285,20 @@ dialog::backdrop{background:#000b}
 <button id="fab" title="Remote" aria-label="Open the remote">
   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="7" r="1.6" fill="currentColor" stroke="none"/><path d="M10 12h4M10 15h4M10 18h4"/></svg>
 </button>
+<button id="qrfab" title="Open on another device" aria-label="Show the QR code to open this page on another device">
+  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm8-2h3v3h-3v-3zm5 0h3v3h-3v-3zm-5 5h3v3h-3v-3zm5 0h3v3h-3v-3zm-2.5-2.5h3v3h-3v-3z"/></svg>
+</button>
+<dialog id="qrdlg">
+  <div class="in">
+    <button class="xclose" id="qclose" title="Close"><svg class="ic"><use href="#i-close"/></svg></button>
+    <h3>Open on another device</h3>
+    <p class="muted" id="qrmsg">Scan this code with a phone or tablet on the same Wi-Fi network.</p>
+    <img id="qrimg" alt="QR code of the link below" hidden>
+    <code id="qrlink"></code>
+    <button id="qrcopy">Copy the link</button>
+    <p class="muted" style="margin:12px 0 0">The link contains the access key: anyone who has it can control the TV from your network.</p>
+  </div>
+</dialog>
 <dialog id="remotedlg">
     <section id="remote">
       <button id="rclose" title="Close"><svg class="ic"><use href="#i-close"/></svg></button>
@@ -319,11 +375,62 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-const act = (path, body, msg) => api(path, body)
-  .then(() => { if (msg) toast(msg); setTimeout(refresh, 400); return true; })
-  .catch(e => { toast('Error: ' + e.message); return false; });
+// A launch can take a while (reading a link, finding torrent sources), and a stream can break after it was sent
+// (the site refuses, the torrent stalls, the TV cannot decode it). Both are shown in the player, not in pop-ups.
+const LAUNCHES = ['cast', 'castlink', 'play'];
+const icon = name => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), u = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  s.setAttribute('class', 'ic'); u.setAttribute('href', '#i-' + name); s.append(u); return s; };
+let lastLaunch = null;
+function renderJob(j) {
+  const failed = !j.busy && !!j.error;
+  $('#pload').hidden = !j.busy;
+  $('#pfail').hidden = !failed;
+  $('#player').classList.toggle('covered', j.busy || failed);
+  if (j.busy) {
+    $('#pltitle').textContent = j.title;
+    $('#psteps').replaceChildren(...j.steps.map(([label, detail], i) => {
+      const now = i === j.steps.length - 1, li = document.createElement('li'), mark = document.createElement('span');
+      if (now) { li.className = 'now'; mark.className = 'spin'; }
+      li.append(now ? mark : icon('check'), label);
+      if (detail) { const d = document.createElement('small'); d.textContent = detail; li.append(d); }
+      return li;
+    }));
+  }
+  if (failed) {
+    $('#pfmsg').textContent = j.error;
+    $('#pwhy').hidden = !j.detail;
+    $('#pdetail').textContent = j.detail;
+    $('#pretry').hidden = !lastLaunch;
+  }
+}
+const checkJob = () => api('job').then(renderJob).catch(() => {});
+async function act(path, body, msg) {
+  const isLaunch = LAUNCHES.includes(path);
+  let watch;
+  if (isLaunch) {
+    lastLaunch = [path, body];
+    renderJob({ busy: true, title: '', steps: [['Starting', '']], error: '' });
+    scrollTo({ top: 0, behavior: 'smooth' });
+    watch = setInterval(checkJob, 700);
+  }
+  try {
+    await api(path, body);
+    if (msg && !isLaunch) toast(msg);
+    setTimeout(refresh, 400);
+    return true;
+  } catch (e) {
+    if (!isLaunch) toast('Error: ' + e.message);  // a failed launch is explained in the player
+    return false;
+  } finally {
+    clearInterval(watch);
+    if (isLaunch) { await refresh(); await checkJob(); }
+  }
+}
+$('#pretry').addEventListener('click', () => lastLaunch && act(...lastLaunch));
+$('#pdismiss').addEventListener('click', () => api('dismiss', {}).then(checkJob));
 
-let seeking = false, voling = false, pos = 0, dur = 0, state = '', uri = '';
+
+let seeking = false, voling = false, pos = 0, dur = 0, state = '', uri = '', buffered = 0;
 const STATES = { PLAYING: 'Playing', PAUSED_PLAYBACK: 'Paused', STOPPED: 'On', NO_MEDIA_PRESENT: 'On', TRANSITIONING: 'Loading…' };
 
 function paint() {
@@ -332,6 +439,7 @@ function paint() {
   if (!seeking) $('#seek').value = pos;
   const shown = seeking ? +$('#seek').value : pos;
   $('#seek').style.setProperty('--p', (dur ? shown / dur * 100 : 0) + '%');
+  $('#seek').style.setProperty('--b', (dur ? Math.min(Math.max(buffered, shown) / dur, 1) * 100 : 0) + '%');
   $('#time').textContent = `${hms(shown)} / ${hms(dur)}`;
 }
 
@@ -346,8 +454,8 @@ async function refresh() {
     const active = ['PLAYING', 'PAUSED_PLAYBACK', 'TRANSITIONING'].includes(state);
     $('#player').classList.toggle('idle', !active);
     $('#ptitle').textContent = s.title || 'Now playing';
-    if (active && s.TrackURI !== uri) {  // new video: new thumbnail
-      uri = s.TrackURI;
+    if (active && s.playing !== uri) {  // new video: new thumbnail
+      uri = s.playing;
       const img = new Image(), src = '/api/thumb?' + encodeURIComponent(uri.slice(-60));
       img.onload = () => { $('#player').style.backgroundImage = `url("${src}")`; };
       img.onerror = () => { $('#player').style.backgroundImage = ''; };
@@ -357,6 +465,20 @@ async function refresh() {
     $('#subctl').hidden = s.subDelay === undefined;
     if (s.subDelay !== undefined && !subPending) $('#subv').textContent = fmtDelay(s.subDelay);
     subDelay = s.subDelay || 0;
+    // torrent health: a source slower than the movie is the usual cause of stutter; pausing lets the buffer grow
+    const tr = s.torrent, rate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : Math.round(b / 1e3) + ' kB/s';
+    buffered = tr ? secs(s.RelTime) + tr.ahead : 0;
+    $('#tinfo').hidden = !tr;
+    if (tr) {
+      const cell = (label, value) => { const e = document.createElement('span'), v = document.createElement('b'); v.textContent = value; e.append(label + ' ', v); return e; };
+      const cells = [cell('Sources', tr.peers), cell('Download', rate(tr.speed)), cell('Needed', tr.need ? rate(tr.need) : '?'), cell('Buffered', hms(tr.ahead))];
+      if (tr.need && tr.speed < tr.need) {
+        const w = document.createElement('span'); w.className = 'warn';
+        w.textContent = tr.ahead > 60 ? 'This source is slower than the movie: playback runs on the buffer.' : 'This source is slower than the movie: pause to let it load (grey bar), or pick another source.';
+        cells.push(w);
+      }
+      $('#tinfo').replaceChildren(...cells);
+    }
     if (s.subsNote && s.subsNote !== lastNote) toast('Subtitles ' + s.subsNote);
     lastNote = s.subsNote || '';
     dur = secs(s.TrackDuration); pos = secs(s.RelTime);
@@ -368,6 +490,8 @@ async function refresh() {
   }
 }
 (async function loop() { await refresh(); setTimeout(loop, 3000); })();
+// its own loop: the launch state must show even while the TV is slow to answer
+(async function jobLoop() { await checkJob(); setTimeout(jobLoop, 2000); })();
 setInterval(() => { if (state === 'PLAYING' && pos < dur) { pos++; paint(); } }, 1000);  // smooth progress between two polls
 
 // Subtitle delay: clicks are accumulated, then the stream is restarted only once
@@ -405,15 +529,14 @@ $('#vol').addEventListener('change', e => { act('volume', { value: +e.target.val
 $('#seek').addEventListener('input', () => { seeking = true; paint(); });
 $('#seek').addEventListener('change', e => { pos = +e.target.value; seeking = false; paint(); act('transport', { action: 'seek', seconds: pos }); });
 
-async function castLink(b, mode, busy) {
-  const label = b.innerHTML; b.disabled = true; b.textContent = busy;
-  await act('castlink', { url: $('#link').value, mode }, 'Video sent to the TV');
-  b.disabled = false; b.innerHTML = label;
+async function castLink(b, mode) {
+  b.disabled = true;
+  await act('castlink', { url: $('#link').value, mode });
+  b.disabled = false;
 }
 $('#castbar').addEventListener('submit', e => { e.preventDefault(); castLink($('#castlink'), 'stream', 'Connecting…'); });
 $('#castdl').addEventListener('click', e => castLink(e.target, 'download', 'Downloading…'));
 $('#ytapp').addEventListener('click', () => act('youtube', { url: $('#link').value }, 'Video sent to the TV\'s YouTube app'));
-$('#pathform').addEventListener('submit', e => { e.preventDefault(); act('cast', { path: $('#path').value }, 'Sent to the TV'); });
 
 let files = [];
 function renderFiles() {
@@ -621,12 +744,10 @@ async function openFilm(id, fromUrl = {}) {
   };
   async function launch(source, start, button) {
     chosen = { ...source }; sync();
-    button.disabled = true; toast('Connecting to the source…');
     const { subs, alts } = pickSubs(source.filename);
-    const done = await act('play', { ...source, title: meta.name, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
-      film: { id, poster: meta.poster }, start }, 'Movie sent to the TV');
-    button.disabled = false;
-    if (done) { keepUrl = true; dlg.close(); scrollTo({ top: 0, behavior: 'smooth' }); }  // the URL keeps the launched movie
+    keepUrl = true; dlg.close();  // the player shows the launch; the URL keeps the launched movie
+    await act('play', { ...source, title: meta.name, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
+      film: { id, poster: meta.poster }, start });
   }
   const resumeAt = saved && saved.position > 30 && !finished(saved) ? saved.position : 0;
   $('#fresume').hidden = !chosen;
@@ -694,6 +815,22 @@ $('#fab').addEventListener('click', () => $('#remotedlg').open ? $('#remotedlg')
 $('#rclose').addEventListener('click', () => $('#remotedlg').close());
 if (location.hash === '#remote') $('#remotedlg').showModal();  // direct link to the remote
 $('#remotedlg').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });  // click outside
+// QR code: the local network link, key included, for phones and other devices
+$('#qrfab').addEventListener('click', async () => {
+  $('#qrdlg').showModal();
+  const { links = [] } = await api('links').catch(() => ({}));
+  const on = links.length > 0;
+  $('#qrmsg').textContent = on ? 'Scan this code with a phone or tablet on the same Wi-Fi network.'
+    : 'Access from other devices is off. Start the server with: python3 server.py --lan';
+  $('#qrlink').textContent = links[0] || '';
+  $('#qrcopy').hidden = !on;
+  $('#qrimg').hidden = true;
+  if (on) { $('#qrimg').onload = () => { $('#qrimg').hidden = false; }; $('#qrimg').src = '/api/qr.png?' + Date.now(); }
+});
+$('#qrcopy').addEventListener('click', () => navigator.clipboard.writeText($('#qrlink').textContent).then(() => toast('Link copied'), () => toast('Select the link to copy it')));
+$('#qclose').addEventListener('click', () => $('#qrdlg').close());
+$('#qrdlg').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+if (location.hash === '#qr') $('#qrfab').click();
 $('#fclose').addEventListener('click', () => $('#film').close());
 $('#film').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });  // click on the backdrop
 $('#film').addEventListener('close', () => { if (!keepUrl) setUrl({}); keepUrl = false; loadProgress(); });

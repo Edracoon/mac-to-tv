@@ -90,6 +90,8 @@ To leave it running on a Mac that stays at home:
 - **After a reboot** the server starts once you log in.
 - At each start the server tidies up: cache files older than a week are deleted, `server.log` is emptied above 5 MB,
   and a TorrServer left behind by a killed server is stopped.
+- The QR button next to the remote button shows the local network link, key included, as a QR code: scan it
+  from a phone instead of typing the address. The code is drawn by `ffmpeg-full` (`GET /api/qr.png`).
 - From a phone, use the name printed at startup (`http://<mac-name>.local:8765/?key=…`) rather than the IP address,
   which can change on a laptop.
 - If YouTube links stop working, update the extractor: `brew upgrade yt-dlp`.
@@ -138,8 +140,16 @@ The page queries Stremio-format add-ons directly (open protocol: `manifest.json`
   like `http://192.168.1.18:8765/?key=…`. Open it once on the device: the key is remembered for one year (cookie).
   The key is in `lan-key.txt`; delete this file and restart to change it (the devices will have to open the new link).
   Without the key, a device on the network gets a refusal (403). Access stays limited to the local network: do not forward this port on the router.
-- Only `/media/<token>/…` is reachable from the local network: this is where the TV reads the current video
-  (random token, renewed on every send).
+- **What a device holding the key can and cannot do.** It can use the whole interface: remote, catalog, launching
+  videos. It cannot read the Mac's files: the server only opens files inside the movies folder (and its own cache),
+  after resolving `..` and symbolic links, and only media files. Torrents are accepted as magnet links, hashes or web
+  addresses, never as a local path. A TV can only be selected at a private network address.
+- **The video being played** is served at `/media/<token>/…` (random token, renewed on every send). That address is
+  never given to the page, and the server only answers it for the selected TV: the TV itself tells anyone on the
+  network what it is playing, so the token alone is not treated as a secret.
+- `lan-key.txt` is readable by its owner only.
+- Not covered: the link is plain HTTP, so the key can be captured by someone listening on the Wi-Fi; and the TV's own
+  network remote has no protection, with or without this project. Use `--lan` on networks you trust.
 - Reserve the TV's IP in the router (static DHCP lease); if it changes, just choose the TV again in the page.
 
 ## TV control (`tv.py`)
@@ -192,6 +202,47 @@ Quirks observed on this TV (other DLNA players may behave differently):
 
 Known limits: Arte does not start at the beginning of a movie (unresolved); multi-file torrents → largest video file;
 no re-encoding for formats the TV cannot decode.
+
+### Torrent speed and buffer
+
+A torrent slower than the movie's bitrate stutters, whatever the Mac or the TV do. Nothing is refused for being slow;
+the player shows what is going on instead:
+
+- a light grey bar on the seek bar: the part of the movie already downloaded after the playback position;
+- a line under the player: connected sources, download speed, speed the movie needs, and time buffered;
+- a warning when the source is slower than the movie. Pausing lets the buffer grow, as in other streaming players.
+
+TorrServer holds up to 512 MB of the movie in memory ahead of playback (`TORRENT_CACHE` in `server.py`).
+
+**One download at a time, nothing in the background.** Every other torrent is dropped before a torrent starts, after
+every launch (successful or not) and when playback is stopped (`only_torrent()`). The background subtitle check reads
+the torrent that is playing, never another one; it only runs when the download is at least 2.5 times faster than the
+movie, and it is cancelled if another video is launched.
+
+### Formats the TV cannot decode
+
+Before sending a video (file or catalog movie), the server reads its codecs with `ffprobe` and compares them with what
+the TV decodes (`TV_VIDEO`, `TV_AUDIO` in `server.py`). When something does not fit, the video goes through the live
+stream and only that part is re-encoded: AV1 video becomes H.264, DTS audio becomes stereo AAC, the rest is copied.
+The launch shows a "Converting for the TV" stage. As with burned-in subtitles, seeking then restarts the stream.
+
+Checked on the Grundig with generated clips: H.264 and HEVC (8 and 10 bit) play as they are; AV1 makes the TV stop at
+once. Audio support cannot be detected from the server (a silent movie still "plays"): AAC, MP3 and Dolby Digital are
+assumed fine, everything else is converted. HDR video that has to be re-encoded is not tone-mapped yet.
+
+### Launch stages and failures
+
+Starting a link or a torrent takes a while, and a stream can break after it was sent. Both are shown in the player
+area of the page rather than in pop-ups:
+
+- while launching: a spinner, what is being started, and the stages passed so far ("Reading the link",
+  "Finding torrent sources — 3 connected", "Preparing subtitles", "Starting the TV");
+- on failure: one plain sentence ("This link could not be read.", "The torrent stopped sending data.", "The TV stopped
+  right away. It probably cannot play this format."), the technical line behind "Technical details", and
+  "Try again" / "Dismiss".
+
+The server publishes this state on `GET /api/job` (`busy`, `title`, `steps`, `error`, `detail`); any open page shows
+it, including one that did not start the launch. `POST /api/dismiss` clears a failure.
 
 ## Folders
 

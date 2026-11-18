@@ -176,13 +176,21 @@ class TV:
         self.services, self.app_url = info["services"], info["app_url"]
         self.remote = next((R(self) for R in REMOTES if R.probe(self)), None)
 
-    def refresh(self):
-        """(Re)reads what the TV publishes: its control addresses change when its player restarts."""
-        locations = ssdp(2.0, only_ip=self.ip).get(self.ip, ())
-        info = summarize([d for d in map(describe, locations) if d])
-        if not info:
+    def refresh(self, tries=3):
+        """(Re)reads what the TV publishes: its control addresses change when its player restarts.
+        Discovery answers travel over UDP and the player can be a few seconds late (busy, or restarting) while the
+        TV's other services already answer: ask again before concluding, and never trade a known player for nothing."""
+        seen = None
+        for _ in range(tries):
+            locations = ssdp(2.0, only_ip=self.ip).get(self.ip, ())
+            info = summarize([d for d in map(describe, locations) if d])
+            if info and "AVTransport" in info["services"]:
+                return self.load(info)
+            seen = info or seen
+        if not seen:
             raise RuntimeError(f"TV {self.ip} not found on the network (switched off?)")
-        self.load(info)
+        if not self.has_player:
+            self.load(seen)  # a TV without a network player: still worth describing
 
     @property
     def has_player(self):
@@ -198,19 +206,19 @@ class TV:
                 "channels": bool(self.remote and self.remote.has_channels), "apps": bool(self.app_url)}
 
     # DLNA player
-    def soap(self, service, action, args="", retry=True):
+    def soap(self, service, action, args="", retry=True, timeout=4):
         if service not in self.services:
             if not retry:
-                raise RuntimeError(f"this TV does not have the {service} service")
+                raise RuntimeError(f"the TV's network player ({service}) was not found on the network")
             self.refresh()
-            return self.soap(service, action, args, retry=False)
+            return self.soap(service, action, args, retry=False, timeout=timeout)
         stype, url = self.services[service]
         body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
                 's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
                 f'<u:{action} xmlns:u="{stype}">{args}</u:{action}></s:Body></s:Envelope>')
         req = urllib.request.Request(url, body.encode(), {"Content-Type": 'text/xml; charset="utf-8"', "SOAPACTION": f'"{stype}#{action}"'})
         try:
-            with urllib.request.urlopen(req, timeout=4) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 return dict(re.findall(r"<(\w+)>([^<]*)</\1>", r.read().decode("utf-8", "replace")))
         except urllib.error.HTTPError:
             raise  # SOAP fault: the TV answered, the address is right
@@ -218,7 +226,7 @@ class TV:
             if not retry:
                 raise
             self.refresh()
-            return self.soap(service, action, args, retry=False)
+            return self.soap(service, action, args, retry=False, timeout=timeout)
 
     # Remote
     def press(self, key):
