@@ -2,7 +2,7 @@
 
 Local web UI, served by a Mac, to control a TV on the local network and play videos on it: YouTube-style player,
 Stremio-style movie catalog, files from the Mac, ad-free YouTube links, torrents, burned-in subtitles,
-remote.
+remote. The same videos can also be played in the browser itself, without the TV.
 
 ## Which TVs are compatible?
 
@@ -229,6 +229,35 @@ The launch shows a "Converting for the TV" stage. As with burned-in subtitles, s
 Checked on the Grundig with generated clips: H.264 and HEVC (8 and 10 bit) play as they are; AV1 makes the TV stop at
 once. Audio support cannot be detected from the server (a silent movie still "plays"): AAC, MP3 and Dolby Digital are
 assumed fine, everything else is converted. HDR video that has to be re-encoded is not tone-mapped yet.
+
+### Playing in the browser instead of the TV
+
+Every "Play" button comes with a switch, **On the TV / Here** (remembered per browser). "Here" plays the same
+source in the page's own player: nothing is sent to the TV, which can keep playing something else, and no TV is
+needed at all. The two sides share what comes before playback (catalog, sources, torrents, subtitles download,
+resume positions, figures) and nothing after it:
+
+| | On the TV | Here |
+|---|---|---|
+| Server state | `shared`, `job`, addresses under `/media/<token>/` (open to the TV) | `watching`, `wjob`, addresses under `/watch/<token>/` (the page only) |
+| MP4 with H.264 + AAC/MP3 | served as a file | served as a file: seeking is instant |
+| MKV, YouTube, AC3/DTS sound, HEVC, AV1… | file, or MPEG-TS live stream | fragmented MP4 from `ffmpeg`: H.264 picture copied, anything else re-encoded (hardware H.264, 1080p at most), sound to stereo AAC |
+| Seeking in a stream | restarts the stream | restarts the stream (`/api/watchat` says where it really starts: a copied picture starts on the key frame before) |
+| Subtitles | burned into the picture | a text track drawn by the browser (`.srt` served as WebVTT): changing the delay is instant |
+| Position, time played | read from the TV every 10 s | reported by the page every 10 s (`/api/watching`) |
+
+While a video plays here and the TV answers, a **Switch to the TV** button under the player hands it over: same
+source, same point, same subtitles and delay; the torrent keeps what it has already downloaded.
+
+The automatic subtitle check also runs for a video played here; the page reloads its subtitle track when a
+better-timed file is found.
+
+Limits: checked with **Firefox on the Mac** only. Safari and iOS would need HLS for the converted streams (not built).
+HEVC is always re-encoded: Firefox does not start a stream on the "open GOP" key frames x265 movies are made of, so
+copying it worked at the start of a movie and hung after every seek. Only the first sound track is played. One video
+at a time for all browsers, and still one torrent at a time for the TV and the browser together: starting a torrent on
+one side stops the other side's. HDR that is re-encoded is not tone-mapped. A page closed without stopping lets go of
+its torrent at once when the browser says so, after 15 minutes otherwise.
 
 ### Launch stages and failures
 

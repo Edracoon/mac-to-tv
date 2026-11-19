@@ -70,6 +70,25 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 #player{position:relative;width:100%;aspect-ratio:16/9;max-height:68vh;background:#000 center/cover no-repeat;border-radius:14px;overflow:hidden;color:#fff;user-select:none}
 #player::before{content:"";position:absolute;inset:0;background:linear-gradient(#0009,transparent 22%,transparent 60%,#000d)}
 #player.idle::before{background:radial-gradient(circle at 50% 40%,#2a2a2e,#0c0c0d)}
+/* played in this page ("here"): the picture sits under the gradient and the controls, which fade while it plays */
+#player{isolation:isolate}
+#vid{position:absolute;inset:0;z-index:-1;width:100%;height:100%;background:#000}
+#player.here{background-image:none!important}
+#player.here::before{pointer-events:none}
+#player.here::before,#player.here #bar,#player.here #big,#player.here #ptitle{transition:opacity .25s}
+#player.here.quiet{cursor:none}
+#player.here.quiet::before,#player.here.quiet #bar,#player.here.quiet #big,#player.here.quiet #ptitle{opacity:0;pointer-events:none}
+#player.here.wait::after{content:"";position:absolute;top:calc(50% - 22px);left:calc(50% - 22px);width:44px;height:44px;box-sizing:border-box;border-radius:50%;border:3px solid #fff3;border-top-color:#fff;animation:spin .9s linear infinite;pointer-events:none}
+#player.here.wait #big{display:none}
+#player:fullscreen{max-height:none;aspect-ratio:auto;border-radius:0}
+#fs{display:none}
+#player.here #fs{display:block}
+#vid::cue{font-size:clamp(15px,2.6vw,30px);background:#000a}
+/* where a video is played: on the TV, or in this page */
+.where{display:inline-flex;flex:none;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.where button,#fplaybar .where button{border:0;border-radius:0;font-size:13px;padding:8px 12px;background:none}
+.where button.on,#fplaybar .where button.on{background:var(--fg);color:var(--bg);font-weight:600}
+body[data-where=here] .tvonly{display:none}
 #ptitle{position:absolute;top:0;left:0;right:0;padding:16px 20px;font-size:18px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #big{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:76px;height:76px;border-radius:50%;border:0;background:#000a;color:#fff;font-size:30px;padding:0;backdrop-filter:blur(4px)}
 #big:hover{background:var(--accent)}
@@ -122,6 +141,8 @@ input[type=text]{font:inherit;font-size:14px;flex:1;min-width:0;padding:9px 12px
 /* what is playing, under the player */
 #about{display:flex;gap:16px;align-items:flex-start;margin-top:16px}
 #about>div{min-width:0;flex:1}
+#totv{flex:none;white-space:nowrap}
+@media (max-width:560px){#about{flex-wrap:wrap} #totv{order:-1;flex-basis:100%}}
 #aposter{flex:none;max-width:min(200px,32%);max-height:220px;border-radius:10px;object-fit:cover;background:var(--line)}
 #atitle{margin:0 0 4px;font-size:20px;line-height:1.2}
 #adesc{margin:10px 0 0;white-space:pre-line;overflow-wrap:anywhere;max-height:11.5em;overflow:auto}
@@ -255,6 +276,7 @@ body.hasmini #toast{bottom:76px}
   <symbol id="i-mute" viewBox="0 0 24 24"><path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zM19 12c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></symbol>
   <symbol id="i-power" viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></symbol>
   <symbol id="i-movie" viewBox="0 0 24 24"><path d="m18 4 2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4h-4z"/></symbol>
@@ -347,7 +369,7 @@ body.hasmini #toast{bottom:76px}
     <section>
       <h2>Subtitles</h2>
       <select id="fsubs"><option value="">No subtitles</option></select>
-      <p class="muted" id="fsubnote" style="margin:10px 0 0" hidden>With subtitles, the Mac burns them into the picture: every jump in the movie takes a few seconds.</p>
+      <p class="tvonly muted" id="fsubnote" style="margin:10px 0 0" hidden>With subtitles, the Mac burns them into the picture: every jump in the movie takes a few seconds.</p>
     </section>
     <section>
       <div class="row">
@@ -365,8 +387,9 @@ body.hasmini #toast{bottom:76px}
     </section>
     <div id="fplaybar">
       <span id="fpicked" class="muted"></span>
+      <span class="where" role="group" aria-label="Where to play"><button type="button" data-where="tv">On the TV</button><button type="button" data-where="here">Here</button></span>
       <button class="primary" id="fgo" hidden></button>
-      <button id="fstart">Play on TV</button>
+      <button id="fstart">Play</button>
     </div>
   </div>
 
@@ -375,9 +398,10 @@ body.hasmini #toast{bottom:76px}
       <h2>Play a link</h2>
       <form id="castbar">
         <input id="link" type="text" placeholder="Paste a link: YouTube, Arte, Vimeo… or a magnet link (torrent)">
-        <button class="primary" id="castlink" title="Live playback, no ads, no download"><svg class="ic"><use href="#i-play"/></svg> Play on TV</button>
-        <button type="button" id="castdl" title="Fallback if live playback stutters: downloads the whole video, then plays it">Download first</button>
-        <button type="button" id="ytapp" title="Opens the video in the TV's YouTube app (with ads)">Via the YouTube app</button>
+        <button class="primary" id="castlink" title="Live playback, no ads, no download"><svg class="ic"><use href="#i-play"/></svg> Play</button>
+        <button type="button" id="castdl" class="tvonly" title="Fallback if live playback stutters: downloads the whole video, then plays it">Download first</button>
+        <button type="button" id="ytapp" class="tvonly" title="Opens the video in the TV's YouTube app (with ads)">Via the YouTube app</button>
+        <span class="where" role="group" aria-label="Where to play"><button type="button" data-where="tv">On the TV</button><button type="button" data-where="here">Here</button></span>
       </form>
     </section>
     <section>
@@ -400,6 +424,7 @@ body.hasmini #toast{bottom:76px}
       <div class="row">
         <input id="filter" type="text" placeholder="Filter…">
         <span id="dir" class="muted"></span>
+        <span class="where" role="group" aria-label="Where to play"><button type="button" data-where="tv">On the TV</button><button type="button" data-where="here">Here</button></span>
       </div>
       <ul id="files"><li><span class="muted">Loading…</span></li></ul>
     </section>
@@ -438,6 +463,7 @@ body.hasmini #toast{bottom:76px}
   <div class="view" id="v-player" hidden>
     <div>
   <div id="player" class="idle">
+    <video id="vid" playsinline hidden></video>
     <div id="ptitle"></div>
     <div id="idle">Nothing playing.<br>Pick a movie, a video or a file.</div>
     <div id="pload" class="over" hidden>
@@ -472,13 +498,14 @@ body.hasmini #toast{bottom:76px}
           </div>
         </div>
         <button data-transport="stop" title="Stop playback"><svg class="ic"><use href="#i-stop"/></svg></button>
+        <button id="fs" title="Full screen (f)"><svg class="ic"><use href="#i-full"/></svg></button>
       </div>
     </div>
   </div>
 
   <div id="under">
     <div id="tinfo" hidden></div>
-    <div id="subctl" hidden title="If the subtitles are out of sync. Each adjustment restarts the stream (a few seconds).">
+    <div id="subctl" hidden title="If the subtitles are out of sync. On the TV, each adjustment restarts the stream (a few seconds).">
       <span class="muted">Subtitles</span>
       <button data-sub="-5" title="Subtitles 5 s earlier">−5 s</button>
       <button data-sub="-0.5" title="Subtitles 0.5 s earlier">−0.5</button>
@@ -499,6 +526,7 @@ body.hasmini #toast{bottom:76px}
         <a id="alink" target="_blank" rel="noopener" hidden>Open the original page</a>
       </div>
     </div>
+    <button class="primary" id="totv" title="Stops here and carries on, on the TV, from the same point" hidden>Switch to the TV</button>
   </section>
     </div>
   </div>
@@ -612,12 +640,19 @@ function renderJob(j) {
     $('#pretry').hidden = !lastLaunch;
   }
 }
-const checkJob = () => api('job').then(renderJob).catch(() => {});
-async function act(path, body, msg) {
+// Two players behind the same controls: the TV (driven through the server) and this page's own <video> ("here").
+// `where` is the one the next launch goes to; `here` is the video this page is playing, if any; jobApi says whose
+// launch stages the player shows.
+let where = 'tv', here = null, jobApi = 'job';
+try { if (localStorage.where === 'here') where = 'here'; } catch {}
+const checkJob = () => api(jobApi).then(renderJob).catch(() => {});
+async function act(path, body, msg, on = where) {
   const isLaunch = LAUNCHES.includes(path);
+  if (isLaunch && on === 'here') return watchHere(path, body);
   let watch;
   if (isLaunch) {
-    lastLaunch = [path, body];
+    stopHere();  // one player at a time in this page
+    lastLaunch = [path, body, msg, 'tv'];
     if (document.body.dataset.view !== 'player') go(location.pathname + '#player');  // a launch is followed in the player
     renderJob({ busy: true, title: '', steps: [['Starting', '']], error: '' });
     scrollTo({ top: 0, behavior: 'smooth' });
@@ -637,7 +672,7 @@ async function act(path, body, msg) {
   }
 }
 $('#pretry').addEventListener('click', () => lastLaunch && act(...lastLaunch));
-$('#pdismiss').addEventListener('click', () => api('dismiss', {}).then(checkJob));
+$('#pdismiss').addEventListener('click', () => api('dismiss', { watch: jobApi === 'watchjob' }).then(() => { if (!here) jobApi = 'job'; }).then(checkJob));
 
 
 let seeking = false, voling = false, pos = 0, dur = 0, state = '', uri = '', buffered = 0, active = false;
@@ -682,11 +717,13 @@ function updateMini() {
 
 async function refresh() {
   try {
-    const s = await api('status');
-    state = s.CurrentTransportState;
+    const s = await api('status'), tvState = s.CurrentTransportState;
     if (offline) { offline = false; loadInfo(); }  // the TV is back: re-read what its remote can do
-    $('#state').textContent = STATES[state] || state;
+    $('#state').textContent = STATES[tvState] || tvState;
     $('#state').className = 'pill on';
+    paintToTv();
+    if (here) return;  // the player is showing the video played in this page, not the TV's
+    state = tvState;
     if (!voling) { $('#vol').value = s.CurrentVolume; $('#volv').textContent = s.CurrentVolume; }
     active = ['PLAYING', 'PAUSED_PLAYBACK', 'TRANSITIONING'].includes(state);
     $('#player').classList.toggle('idle', !active);
@@ -703,47 +740,52 @@ async function refresh() {
     $('#subctl').hidden = s.subDelay === undefined;
     if (s.subDelay !== undefined && !subPending) $('#subv').textContent = fmtDelay(s.subDelay);
     subDelay = s.subDelay || 0;
-    // torrent health: a source slower than the movie is the usual cause of stutter; pausing lets the buffer grow
-    const tr = s.torrent, rate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : Math.round(b / 1e3) + ' kB/s';
-    buffered = tr ? secs(s.RelTime) + tr.ahead : 0;
-    $('#tinfo').hidden = !tr;
-    if (tr) {
-      const cell = (label, value) => { const e = document.createElement('span'), v = document.createElement('b'); v.textContent = value; e.append(label + ' ', v); return e; };
-      const cells = [cell('Sources', tr.peers), cell('Download', rate(tr.speed)), cell('Needed', tr.need ? rate(tr.need) : '?'), cell('Buffered', hms(tr.ahead))];
-      const left = secs(s.TrackDuration) - secs(s.RelTime);  // near the end, a short buffer is the whole rest of the movie
-      if (tr.need && tr.speed < tr.need && tr.ahead < 300 && tr.ahead < left - 10) {  // with minutes in hand, a slow or idle download is not a problem: once its buffer is full, the engine stops downloading
-        const w = document.createElement('span'); w.className = 'warn';
-        w.textContent = tr.ahead > 60 ? 'This source is slower than the movie: playback runs on the buffer.' : 'This source is slower than the movie: pause to let it load (grey bar), or pick another source.';
-        cells.push(w);
-      }
-      $('#tinfo').replaceChildren(...cells);
-    }
+    paintTorrent(s.torrent, secs(s.RelTime), secs(s.TrackDuration));
     if (s.subsNote && s.subsNote !== lastNote) toast('Subtitles ' + s.subsNote);
     lastNote = s.subsNote || '';
     dur = secs(s.TrackDuration); pos = secs(s.RelTime);
     $('#seek').max = dur || 1;
     paint();
   } catch (e) {
-    offline = true; state = ''; $('#state').textContent = tvInfo ? 'Offline' : 'No TV'; $('#state').className = 'pill';
-    $('#player').classList.add('idle');
+    offline = true; $('#state').textContent = tvInfo ? 'Offline' : 'No TV'; $('#state').className = 'pill';
+    paintToTv();
+    if (!here) { state = ''; $('#player').classList.add('idle'); }
   }
+}
+// torrent health: a source slower than the movie is the usual cause of stutter; pausing lets the buffer grow
+function paintTorrent(tr, at, total) {
+  const rate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : Math.round(b / 1e3) + ' kB/s';
+  buffered = tr ? at + tr.ahead : 0;
+  $('#tinfo').hidden = !tr;
+  if (!tr) return;
+  const cell = (label, value) => { const e = document.createElement('span'), v = document.createElement('b'); v.textContent = value; e.append(label + ' ', v); return e; };
+  const cells = [cell('Sources', tr.peers), cell('Download', rate(tr.speed)), cell('Needed', tr.need ? rate(tr.need) : '?'), cell('Buffered', hms(tr.ahead))];
+  const left = total - at;  // near the end, a short buffer is the whole rest of the movie
+  if (tr.need && tr.speed < tr.need && tr.ahead < 300 && tr.ahead < left - 10) {  // with minutes in hand, a slow or idle download is not a problem: once its buffer is full, the engine stops downloading
+    const w = document.createElement('span'); w.className = 'warn';
+    w.textContent = tr.ahead > 60 ? 'This source is slower than the movie: playback runs on the buffer.' : 'This source is slower than the movie: pause to let it load (grey bar), or pick another source.';
+    cells.push(w);
+  }
+  $('#tinfo').replaceChildren(...cells);
 }
 (async function loop() { await refresh(); setTimeout(loop, 3000); })();
 // its own loop: the launch state must show even while the TV is slow to answer
 (async function jobLoop() { await checkJob(); setTimeout(jobLoop, 2000); })();
-setInterval(() => { if (state === 'PLAYING' && pos < dur) { pos++; paint(); } }, 1000);  // smooth progress between two polls
+setInterval(() => { if (!here && state === 'PLAYING' && pos < dur) { pos++; paint(); } }, 1000);  // smooth progress between two polls
 
 // Subtitle delay: clicks are accumulated, then the stream is restarted only once
 let subDelay = 0, subPending = 0, subTimer, lastNote = '';
 const fmtDelay = d => (d > 0 ? '+' : '') + String(d) + ' s';
 function nudgeSubs(delta) {
+  if (here) { here.delay = Math.round((here.delay + delta) * 10) / 10; loadSubs(); return; }  // shown by the page: nothing to restart
   subPending = Math.round((subPending + delta) * 10) / 10;
   $('#subv').textContent = fmtDelay(Math.round((subDelay + subPending) * 10) / 10);
   clearTimeout(subTimer);
   subTimer = setTimeout(async () => { const d = subPending; subPending = 0; if (d) await act('subdelay', { delta: d }, 'Subtitles adjusted'); }, 900);
 }
-const toggle = () => act('transport', { action: state === 'PLAYING' || state === 'TRANSITIONING' ? 'pause' : 'play' });
-const jump = d => { pos = Math.min(Math.max(pos + d, 0), dur); paint(); act('transport', { action: 'seek', seconds: pos }); };
+const toggle = () => here ? (vid.paused ? vid.play().catch(() => {}) : vid.pause()) : act('transport', { action: state === 'PLAYING' || state === 'TRANSITIONING' ? 'pause' : 'play' });
+const seekTo = t => { pos = Math.min(Math.max(t, 0), dur || t); paint(); here ? hereSeek(pos) : act('transport', { action: 'seek', seconds: pos }); };
+const jump = d => seekTo(pos + d);
 $('#pp').addEventListener('click', toggle);
 $('#big').addEventListener('click', toggle);
 $('#mpp').addEventListener('click', toggle);
@@ -752,25 +794,187 @@ $('#mopen').addEventListener('click', () => go(location.pathname + '#player'));
 document.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.key) act('key', { event: b.dataset.key });
+  if (b.dataset.where) setWhere(b.dataset.where);
+  else if (here && b.dataset.key === 'mute' && b.closest('#player')) vid.muted = !vid.muted;
+  else if (here && b.dataset.transport === 'stop') stopHere();
+  else if (b.dataset.key) act('key', { event: b.dataset.key });
   else if (b.dataset.transport) act('transport', { action: b.dataset.transport });
   else if (b.dataset.seek) jump(+b.dataset.seek);
   else if (b.dataset.sub) nudgeSubs(+b.dataset.sub);
   else if (b.dataset.app) act('app', { name: 'YouTube', action: b.dataset.app }, `YouTube app: ${b.dataset.app === 'stop' ? 'closed' : 'launched'}`);
   else if (b.dataset.cast) act('cast', { path: b.dataset.cast }, 'Sent to the TV');
+  else if (b.id === 'fs') document.fullscreenElement ? document.exitFullscreen() : $('#player').requestFullscreen().catch(() => toast('Full screen is not available here'));
 });
 document.addEventListener('keydown', e => {
   if (e.target.matches('input[type=text]') || document.querySelector('dialog[open]') || e.metaKey || e.ctrlKey || $('#player').classList.contains('idle')) return;
   if (e.key === ' ') { e.preventDefault(); toggle(); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); jump(-10); }
   else if (e.key === 'ArrowRight') { e.preventDefault(); jump(10); }
+  else if (e.key === 'f' && here) $('#fs').click();
+  wake();
 });
 $('#volbtn').addEventListener('click', () => { $('#volpop').hidden = !$('#volpop').hidden; $('#volbtn').setAttribute('aria-expanded', !$('#volpop').hidden); });
 document.addEventListener('click', e => { if (!e.target.closest('#volbox')) { $('#volpop').hidden = true; $('#volbtn').setAttribute('aria-expanded', 'false'); } });
-$('#vol').addEventListener('input', e => { voling = true; $('#volv').textContent = e.target.value; });
-$('#vol').addEventListener('change', e => { act('volume', { value: +e.target.value }); setTimeout(() => voling = false, 1500); });
+$('#vol').addEventListener('input', e => { voling = true; $('#volv').textContent = e.target.value; if (here) { vid.volume = e.target.value / 100; vid.muted = false; } });
+$('#vol').addEventListener('change', e => { if (!here) act('volume', { value: +e.target.value }); setTimeout(() => voling = false, 1500); });
 $('#seek').addEventListener('input', () => { seeking = true; paint(); });
-$('#seek').addEventListener('change', e => { pos = +e.target.value; seeking = false; paint(); act('transport', { action: 'seek', seconds: pos }); });
+$('#seek').addEventListener('change', e => { seeking = false; seekTo(+e.target.value); });
+
+// ---- Playing here: this page's <video>. The server prepares the source (api watch) and says whether the browser can
+// read it as a file (seeking is then the browser's business) or gets a converted stream; such a stream has no
+// middle, so seeking means asking for a new one that starts there, and counting time from that point (here.offset).
+const vid = $('#vid');
+function setWhere(w) {
+  where = w;
+  try { localStorage.where = w; } catch {}
+  document.body.dataset.where = w;
+  document.querySelectorAll('.where button').forEach(b => b.classList.toggle('on', b.dataset.where === w));
+}
+setWhere(where);
+async function watchHere(path, body) {
+  stopHere();
+  lastLaunch = [path, body, undefined, 'here'];
+  jobApi = 'watchjob';
+  if (document.body.dataset.view !== 'player') go(location.pathname + '#player');
+  renderJob({ busy: true, title: '', steps: [['Starting', '']], error: '' });
+  scrollTo({ top: 0, behavior: 'smooth' });
+  const poll = setInterval(checkJob, 700);
+  try {
+    startHere(await api('watch', { ...body, kind: { cast: 'file', castlink: 'link' }[path] || 'play' }));
+    return true;
+  } catch (e) {
+    return false;  // explained in the player, from the launch stages
+  } finally {
+    clearInterval(poll);
+    await checkJob();
+  }
+}
+function startHere(r) {
+  here = { ...r, offset: 0, delay: r.subDelay || 0, seeks: 0 };
+  $('#player').classList.remove('idle');
+  $('#player').classList.add('here');
+  vid.hidden = false;
+  vid.poster = r.poster || '';
+  $('#ptitle').textContent = r.title;
+  paintAbout({ title: r.title, about: r.about });
+  $('#tinfo').hidden = true;
+  $('#vol').value = $('#volv').textContent = Math.round(vid.volume * 100);
+  active = true; state = 'TRANSITIONING'; buffered = 0;
+  dur = r.duration; $('#seek').max = dur || 1;
+  paintToTv();
+  hereSeek(r.start || 0);
+}
+async function hereSeek(t) {
+  const h = here, n = ++h.seeks;
+  if (h.direct) {
+    if (vid.src.includes(h.token)) { vid.currentTime = t; return; }
+    else {
+      vid.src = `/watch/${h.token}/file`;
+      if (t) vid.addEventListener('loadedmetadata', () => { vid.currentTime = t; }, { once: true });
+      vid.play().catch(() => {});
+    }
+  } else {
+    h.pending = true;  // until the new stream is asked for, the old one must not move the seek bar
+    $('#player').classList.add('wait');
+    const { start } = await api('watchat', { token: h.token, t }).catch(() => ({ start: t }));
+    if (here !== h || h.seeks !== n) return;  // stopped, or sought again meanwhile
+    h.offset = start; h.pending = false;
+    vid.src = `/watch/${h.token}/stream?t=${start}`;
+    vid.play().catch(() => {});
+  }
+  loadSubs();
+}
+// Subtitles: a text track the browser draws; a delay, or a stream that starts elsewhere, is a new file with shifted times
+function loadSubs() {
+  vid.querySelectorAll('track').forEach(t => t.remove());
+  const h = here;
+  $('#subctl').hidden = !(h && h.subs);
+  if (!h || !h.subs) return;
+  $('#subv').textContent = fmtDelay(h.delay);
+  const t = el('track', { kind: 'subtitles', label: 'Subtitles', default: true, src: `/watch/${h.token}/subs.vtt?shift=${(h.delay - h.offset).toFixed(3)}&v=${encodeURIComponent(h.subs)}` });
+  vid.append(t);
+  t.track.mode = 'showing';
+}
+function herePaint() {
+  const h = here;
+  if (!h) return;
+  const waiting = !vid.paused && !vid.ended && vid.readyState < 3;
+  state = vid.paused || vid.ended ? 'PAUSED_PLAYBACK' : waiting ? 'TRANSITIONING' : 'PLAYING';
+  $('#player').classList.toggle('wait', waiting || !!h.pending);
+  if (h.direct && isFinite(vid.duration) && vid.duration) { dur = vid.duration; $('#seek').max = dur; }
+  if (!h.pending) pos = h.offset + vid.currentTime;
+  if (!h.torrent) {  // what the browser holds ahead; for a torrent, what the engine holds (hereReport)
+    buffered = pos;
+    for (let i = 0; i < vid.buffered.length; i++) if (vid.buffered.start(i) <= vid.currentTime + 1 && vid.buffered.end(i) > vid.currentTime) buffered = h.offset + vid.buffered.end(i);
+  }
+  paint();
+}
+['timeupdate', 'play', 'pause', 'playing', 'waiting', 'canplay', 'durationchange', 'progress', 'seeked', 'emptied'].forEach(e => vid.addEventListener(e, herePaint));
+const hereState = h => ({ token: h.token, position: pos, duration: dur, playing: !vid.paused && !vid.ended && vid.readyState > 2, subs: h.subs, subDelay: h.delay });
+async function hereReport() {
+  const h = here;
+  if (!h || h.pending) return;
+  try {
+    const r = await api('watching', hereState(h));
+    if (here !== h) return;
+    if (r.subs !== h.subs) { h.subs = r.subs; h.delay = r.subDelay; loadSubs(); }  // the server found a better-timed file
+    if (r.note && r.note !== lastNote) toast('Subtitles ' + r.note);
+    lastNote = r.note || '';
+    paintTorrent(r.torrent, pos, dur);
+  } catch {}
+}
+setInterval(hereReport, 10000);
+vid.addEventListener('pause', hereReport);
+vid.addEventListener('ended', hereReport);
+vid.addEventListener('error', async () => {
+  if (!here || !vid.getAttribute('src')) return;
+  await checkJob();
+  if (!jobNow.error) renderJob({ busy: false, title: '', steps: [], error: 'This browser could not play the video.', detail: (vid.error && vid.error.message) || '' });
+});
+function stopHere(tell = true) {
+  const h = here;
+  if (!h) return;
+  if (tell) api('unwatch', hereState(h)).catch(() => {});  // with the last position, for "resume"
+  here = null; jobApi = 'job';
+  paintToTv();
+  if (document.fullscreenElement) document.exitFullscreen();
+  vid.querySelectorAll('track').forEach(t => t.remove());
+  vid.removeAttribute('src'); vid.load(); vid.hidden = true;
+  $('#player').classList.remove('here', 'quiet', 'wait');
+  $('#player').classList.add('idle');
+  $('#subctl').hidden = $('#tinfo').hidden = true;
+  active = false; state = ''; pos = dur = buffered = 0;
+  paintAbout(null); paint(); refresh(); checkJob();
+}
+// "Switch to the TV": offered while a video plays here and the TV answers. The same launch is sent to the TV, from the
+// point reached here. The server is told that this page stopped only once the TV has the video: a torrent dropped in
+// between would lose what it had already downloaded.
+function paintToTv() { $('#totv').hidden = !(here && tvInfo && !offline && lastLaunch); }
+$('#totv').addEventListener('click', async () => {
+  const h = here, [path, body] = lastLaunch || [];
+  if (!h || !path) return;
+  const last = hereState(h), at = Math.floor(pos);
+  stopHere(false);
+  const ok = await act(path, path === 'play' ? { ...body, start: at, subDelay: h.subs ? h.delay : body.subDelay } : body, undefined, 'tv');
+  api('unwatch', last).catch(() => {});
+  // a file or a link has no "start at": seek once the TV plays (a catalog movie resumes by itself)
+  if (ok && path !== 'play' && at > 10) setTimeout(() => act('transport', { action: 'seek', seconds: at }), 2500);
+});
+// leaving the page: the server must not keep a torrent going for nobody
+addEventListener('pagehide', () => { if (here) navigator.sendBeacon('/api/unwatch', new Blob([JSON.stringify(hereState(here))], { type: 'application/json' })); });
+// the controls fade after 3 s of playback without a move; a first touch on a quiet player only brings them back
+let quietTimer, wasQuiet = false;
+function wake() {
+  $('#player').classList.remove('quiet');
+  clearTimeout(quietTimer);
+  quietTimer = setTimeout(() => { if (here && !vid.paused && $('#volpop').hidden) $('#player').classList.add('quiet'); }, 3000);
+}
+$('#player').addEventListener('pointerdown', () => { wasQuiet = $('#player').classList.contains('quiet'); }, true);
+['pointermove', 'pointerdown', 'click'].forEach(e => $('#player').addEventListener(e, wake));
+vid.addEventListener('play', wake);
+vid.addEventListener('pause', wake);
+vid.addEventListener('click', () => { if (!wasQuiet) toggle(); });
+vid.addEventListener('dblclick', () => $('#fs').click());
 
 async function castLink(b, mode) {
   b.disabled = true;
@@ -789,7 +993,7 @@ function renderFiles() {
     const li = document.createElement('li'), name = document.createElement('span'), sz = document.createElement('small'), b = document.createElement('button');
     name.textContent = f.name; name.title = f.path;
     sz.textContent = size(f.size); sz.className = 'muted mono';
-    b.textContent = 'Cast'; b.dataset.cast = f.path;
+    b.textContent = 'Play'; b.dataset.cast = f.path;
     li.append(name, sz, b);
     return li;
   }));
@@ -1067,7 +1271,7 @@ async function showFilm(id, fromUrl = {}) {
     const showPick = () => {
       $('#fgo').hidden = !resumeAt;
       $('#fgo').textContent = `Resume at ${hms(resumeAt)}`;
-      $('#fstart').textContent = resumeAt ? 'Start over' : saved ? 'Watch again' : 'Play on TV';
+      $('#fstart').textContent = resumeAt ? 'Start over' : saved ? 'Watch again' : 'Play';
       $('#fstart').className = resumeAt ? '' : 'primary';
       $('#fgo').disabled = $('#fstart').disabled = !chosen;
       $('#fpicked').textContent = (tag && tag + ' · ') + (chosen ? picked : 'Choose a source below, then play.');

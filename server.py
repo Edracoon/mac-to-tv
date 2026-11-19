@@ -80,7 +80,8 @@ if "--lan" in sys.argv:
 #   busy/title/steps : a launch in progress and the stages it went through, each [label, detail]
 #   error/detail     : why the last playback failed, in plain words, plus the technical line for the curious
 job = {"busy": False, "title": "", "steps": [], "error": "", "detail": "", "stopped": False, "id": 0}
-mine = threading.local()  # .id: the launch this thread is running
+wjob = dict(job, steps=[])  # the same for a video launched in the page's own player ("Playing in the browser", below)
+mine = threading.local()  # .id: the launch this thread is running; .job: the one of the two above it reports to
 
 
 class Superseded(Exception):
@@ -88,12 +89,13 @@ class Superseded(Exception):
 
 
 def step(label, detail=""):
-    if getattr(mine, "id", job["id"]) != job["id"]:
+    j = getattr(mine, "job", job)
+    if getattr(mine, "id", j["id"]) != j["id"]:
         raise Superseded("replaced by a newer launch")
-    if job["steps"] and job["steps"][-1][0] == label:
-        job["steps"][-1][1] = detail
+    if j["steps"] and j["steps"][-1][0] == label:
+        j["steps"][-1][1] = detail
     else:
-        job["steps"].append([label, detail])
+        j["steps"].append([label, detail])
 
 
 def fail(message, detail=""):
@@ -111,26 +113,28 @@ def plain_error(e):
         return "No source answered for this torrent.", ""
     if "torrent engine" in text:
         return "The torrent engine is not running.", text
-    if "not found on the network" in text or isinstance(e, OSError):
+    if "not found on the network" in text or (isinstance(e, OSError) and getattr(mine, "job", job) is job):
         return "The TV is not answering. Is it switched on?", text
     return "Something went wrong while starting playback.", text
 
 
-def launch(title, fn, *args):
-    """Runs a launch (link, file, torrent, catalog movie), publishing its stages and how it failed, if it did."""
-    mine.id = job["id"] + 1
-    job.update(busy=True, title=str(title)[:120], steps=[], error="", detail="", stopped=False, id=mine.id)
+def launch(title, fn, *args, into=None):
+    """Runs a launch (link, file, torrent, catalog movie), publishing its stages and how it failed, if it did.
+    into: wjob for a video played in the browser; the TV's job otherwise."""
+    j = job if into is None else into
+    mine.id, mine.job = j["id"] + 1, j
+    j.update(busy=True, title=str(title)[:120], steps=[], error="", detail="", stopped=False, id=mine.id)
     try:
         return fn(*args)
     except Exception as e:
-        if mine.id == job["id"] and not isinstance(e, Superseded):
-            fail(*plain_error(e))
+        if mine.id == j["id"] and not isinstance(e, Superseded):
+            j["error"], j["detail"] = plain_error(e)
         raise
     finally:
-        if mine.id == job["id"]:  # a replaced launch leaves the player, and the torrent, to its successor
-            job["busy"] = False
-            only_torrent(keep=current_torrent())  # whatever happened, nothing else keeps downloading
-        del mine.id
+        if mine.id == j["id"]:  # a replaced launch leaves the player, and the torrent, to its successor
+            j["busy"] = False
+            only_torrent()  # whatever happened, nothing else keeps downloading
+        del mine.id, mine.job
 
 
 def watch_start(token):
@@ -427,20 +431,27 @@ def link_info(url):
 FFMPEG_SUBS = next((p for p in ("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg", "/usr/local/opt/ffmpeg-full/bin/ffmpeg") if os.path.exists(p)), "ffmpeg")
 
 
-def live_cmd(live):
-    cmd = [FFMPEG_SUBS if live.get("subs") else "ffmpeg", "-v", "error"]
-    for u, headers in live["inputs"]:
+def ffmpeg_inputs(inputs, offset, first=""):
+    """ffmpeg arguments that read `inputs` ([(address, HTTP headers)]) from second `offset`, picture and sound mapped:
+    every track, or with first=":0" only the first picture and the first sound of each input."""
+    cmd = []
+    for u, headers in inputs:
         if u.startswith("http"):
             cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5", "-headers", headers]
             if not u.startswith(TS):
                 # YouTube throttles a video asked for in one request to about its playback speed (measured: 240 s of
                 # 1080p60 not delivered in 100 s, against 5 s in 10 MB requests), which stutters on busy scenes
                 cmd += ["-request_size", "10M"]
-        if live["offset"]:
-            cmd += ["-ss", str(live["offset"])]
+        if offset:
+            cmd += ["-ss", str(offset)]
         cmd += ["-i", u]
-    for i in range(len(live["inputs"])):
-        cmd += ["-map", f"{i}:v?", "-map", f"{i}:a?"]
+    for i in range(len(inputs)):
+        cmd += ["-map", f"{i}:v{first}?", "-map", f"{i}:a{first}?"]
+    return cmd
+
+
+def live_cmd(live):
+    cmd = [FFMPEG_SUBS if live.get("subs") else "ffmpeg", "-v", "error"] + ffmpeg_inputs(live["inputs"], live["offset"])
     if live.get("convert") and not live.get("subs"):
         # A format the TV cannot decode: re-encode only what is needed, copy the rest
         video = ["-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p"] if "video" in live["convert"] else ["-c:v", "copy"]
@@ -566,11 +577,13 @@ def current_torrent():
 
 
 def only_torrent(keep=None):
-    """One download at a time, and none in the background: drops every torrent TorrServer still holds except `keep`.
-    Called before a torrent starts, after every launch (successful or not) and when playback is stopped."""
+    """One download at a time, and none in the background: drops every torrent TorrServer still holds except `keep`
+    (a torrent that starts: it replaces the others, the TV's and the browser's alike); without `keep`, except what the
+    TV and the browser are playing. Called before a torrent starts, after every launch and when playback is stopped."""
+    kept = {keep} if keep else {current_torrent(), ((watched() or {}).get("torrent") or {}).get("hash")}
     try:
         for t in ts("list"):
-            if t.get("hash") and t["hash"] != keep:
+            if t.get("hash") and t["hash"] not in kept:
                 ts("drop", hash=t["hash"])
     except Exception:
         pass
@@ -883,7 +896,7 @@ def verify_subs(live, url, track, duration, paths, memo):
     """In the background during playback: checks the subtitles and, if a better sync stands out, restarts the stream with it.
     The check reads two other parts of the movie, so it competes with playback for the torrent's bandwidth: it only runs
     when the download is comfortably faster than the movie, and stops as soon as something else is launched."""
-    alive = lambda: current() is live
+    alive = lambda: current() is live or watched() is live
     try:
         time.sleep(20)  # let playback buffer, and the download speed settle
         if not alive():
@@ -910,14 +923,16 @@ def verify_subs(live, url, track, duration, paths, memo):
         memo.write_text(json.dumps({"srt": str(srt), "note": note}))
         live["note"] = note
         if changed and alive():
-            live["subs"], live["offset"] = srt, current_position(live)
+            live["subs"] = srt  # the browser's player learns it from its next report and reloads its subtitle track
             live["sub_delay"] = 0  # a delay set by hand was for the uncorrected file
             with progress_lock:
                 p = progress.get(live.get("film"))
                 if p:
                     p["play"]["subDelay"] = 0
                     save_progress()
-            start_live(live)
+            if current() is live:
+                live["offset"] = current_position(live)
+                start_live(live)
     except Exception as e:
         print("subtitle check:", e, flush=True)
 
@@ -936,12 +951,16 @@ def synced_subs(live, url, subs, alts=(), track=None):
         threading.Thread(target=verify_subs, args=(live, url, track, live["duration"], paths, memo), daemon=True).start()
 
 
+def torrent_of(url, size):
+    m = re.match(re.escape(TS) + r"/.*[?&]link=([0-9a-f]{40})", url)
+    return {"hash": m[1], "size": size or 0} if m else None
+
+
 def play_url(url, name, title, size=None, subs=None, poster=None, film=None, start=0, delay=0, alts=(), facts=None):
     """Plays on the TV an address the Mac can read (local TorrServer or direct link), relayed by us.
     subs: address of a .srt to burn in → goes through the live stream (re-encoding).
     film: movie identifier, so that track() records the position; start: resume at this second."""
-    m = re.match(re.escape(TS) + r"/.*[?&]link=([0-9a-f]{40})", url)
-    torrent = {"hash": m[1], "size": size or 0} if m else None
+    torrent = torrent_of(url, size)
     step("Checking the format")
     duration, track, vcodec, acodec = probe(url)
     convert = needs_convert(vcodec, acodec)
@@ -984,19 +1003,22 @@ def cast_torrent(link):
     return play_url(url, name, Path(name).stem, size)
 
 
-def play(a):
-    """Plays a source returned by a Stremio add-on: torrent (infoHash) or direct link (url)."""
-    title = str(a.get("title") or "Movie")
+def add_on_source(a):
+    """A source returned by a Stremio add-on, torrent (infoHash) or direct link (url) → (address the Mac can read, name, size)."""
     if a.get("infoHash"):
         if not re.fullmatch(r"[0-9a-fA-F]{40}", a["infoHash"]):
             raise ValueError("invalid torrent identifier")
         trackers = [s.split(":", 1)[1] for s in a.get("sources") or [] if isinstance(s, str) and s.startswith("tracker:")]
         link = f"magnet:?xt=urn:btih:{a['infoHash']}" + "".join("&tr=" + quote(t, safe="") for t in trackers)
-        url, name, size = torrent_file(link, a.get("fileIdx"), a.get("filename"))
-    elif re.match(r"https?://", a.get("url") or ""):
-        url, name, size = a["url"], Path(urlparse(a["url"]).path).name or "film.mp4", None
-    else:
-        raise ValueError("this source is neither a torrent nor a direct link")
+        return torrent_file(link, a.get("fileIdx"), a.get("filename"))
+    if re.match(r"https?://", a.get("url") or ""):
+        return a["url"], Path(urlparse(a["url"]).path).name or "film.mp4", None
+    raise ValueError("this source is neither a torrent nor a direct link")
+
+
+def remember_play(a):
+    """Notes in progress.json that a catalog movie or episode was launched, and with what → (title, movie id, start)."""
+    title = str(a.get("title") or "Movie")
     film, start = a.get("film") or {}, max(int(a.get("start") or 0), 0)
     if film.get("id"):
         with progress_lock:
@@ -1008,9 +1030,22 @@ def play(a):
                                     **{k: str(film[k])[:200] for k in ("series", "show") if film.get(k)},
                                     **{k: int(film[k]) for k in ("season", "episode") if isinstance(film.get(k), int)}}
             save_progress()
-    alts = [u for u in a.get("subsAlt") or [] if isinstance(u, str) and re.match(r"https?://", u)]
-    return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film.get("id"), start, float(a.get("subDelay") or 0), alts,
-                    about({**(a.get("about") if isinstance(a.get("about"), dict) else {}), "film": film.get("id")}))
+    return title, film.get("id"), start
+
+
+def sub_alts(a):
+    return [u for u in a.get("subsAlt") or [] if isinstance(u, str) and re.match(r"https?://", u)]
+
+
+def film_facts(a):
+    return about({**(a.get("about") if isinstance(a.get("about"), dict) else {}), "film": (a.get("film") or {}).get("id")})
+
+
+def play(a):
+    """Plays on the TV a source returned by a Stremio add-on."""
+    url, name, size = add_on_source(a)
+    title, film, start = remember_play(a)
+    return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film, start, float(a.get("subDelay") or 0), sub_alts(a), film_facts(a))
 
 
 # --- Resume: playback position of the catalog movies, recorded in progress.json (single profile)
@@ -1065,6 +1100,10 @@ def track():
     while True:
         time.sleep(10)
         try:
+            w = watched()
+            if w and time.time() - w["seen"] > 900:  # the page that was playing it is gone (closed, asleep) without saying so
+                watching.clear()
+                only_torrent()
             src = current()
             if src is None:
                 continue
@@ -1083,6 +1122,157 @@ def track():
                     save_progress()
         except Exception:
             pass  # TV off or busy: we retry on the next round
+
+
+# --- Playing in the browser: the same sources, played by the page's own <video> instead of the TV. Kept apart from the
+# TV side: its own launch stages (wjob), its own source (watching), its own addresses (/watch/<token>/…, for the page
+# only, never for the TV). A browser reads fewer formats than the TV and no MPEG-TS: what it reads as is (MP4 with
+# H.264 + AAC) is served as a file, with seeking; the rest goes through ffmpeg as fragmented MP4, an H.264 picture
+# copied, any other re-encoded. Such a stream has no middle: to seek, the page asks for a new one (see watch_at).
+# HEVC is re-encoded although Firefox and Chrome decode it: x265 movies have "open GOP" key frames (CRA), and Firefox
+# never starts a stream on one (checked 2026-11-19: it reads on for hundreds of MB, waiting for an IDR frame), so the
+# start of such a movie played and every seek hung.
+# Subtitles are not burned in: the page shows them itself, from the .srt served as WebVTT.
+# Checked with Firefox on the Mac; Safari and iOS would need HLS for the converted streams (not built).
+# ponytail: one video at a time for all browsers; make `watching` hold one source per page if two people watch at once.
+
+watching = {}  # token → source: the video a browser is playing, one at most
+BROWSER_FILES = {".mp4", ".m4v", ".mov", ".mp3", ".m4a", ".wav"}  # containers a <video> reads without help
+
+
+def watched():
+    return next(iter(watching.values()), None)
+
+
+def browser_convert(vcodec, acodec):
+    """Which parts have to be re-encoded for a browser: a list among "video", "audio".
+    ponytail: 10-bit H.264 is copied although browsers do not decode it; read the pixel format in probe() if it shows up."""
+    return [kind for kind, codec, ok in (("video", vcodec, {"h264"}), ("audio", acodec, {"aac", "mp3"})) if codec and codec not in ok]
+
+
+def watch(a):
+    """Prepares a video for the page's player. a["kind"]: "file" (path), "link" (url: page of a video site, or torrent),
+    else a source returned by a Stremio add-on, as for play(). Returns what the page needs to play it."""
+    kind, track, start = a.get("kind"), None, 0
+    if kind == "file":
+        p = allowed_file(a["path"], MIME)
+        if MIME[p.suffix.lower()].startswith("image"):
+            raise ValueError("pictures can only be shown on the TV")
+        srt = p.with_suffix(".srt")
+        src = {"title": re.sub(r" \[[\w-]{11}\]$", "", p.stem), "inputs": [(str(p), "")], "name": p.name, "file": p, "subs": srt if srt.is_file() else None}
+    elif kind == "link" and not is_torrent(str(a.get("url") or "")):
+        src = link_info(a["url"]) | {"name": "video", "vcodec": "h264", "acodec": "aac"}  # what FORMAT asks the site for
+    else:
+        if kind == "link":
+            url, name, size = torrent_file(a["url"])
+            title, film, facts = Path(name).stem, None, None
+        else:
+            url, name, size = add_on_source(a)
+            (title, film, start), facts = remember_play(a), film_facts(a)
+        src = {"title": title, "inputs": [(url, "")], "name": name, "proxy": url, "film": film, "about": facts,
+               "thumbnail": a.get("poster"), "torrent": torrent_of(url, size)}
+    if "vcodec" not in src:
+        step("Checking the format")
+        src["duration"], track, src["vcodec"], src["acodec"] = probe(src["inputs"][0][0])
+    if kind not in ("file", "link") and a.get("subs"):
+        step("Preparing subtitles")
+        src["sub_delay"] = float(a.get("subDelay") or 0)
+        synced_subs(src, src["proxy"], a["subs"], sub_alts(a), track)
+    src["convert"] = browser_convert(src["vcodec"], src["acodec"])
+    src["direct"] = not src["convert"] and len(src["inputs"]) == 1 and Path(src["name"]).suffix.lower() in BROWSER_FILES
+    if src["convert"]:
+        step("Converting for the browser", " and ".join(f"{src[k[0] + 'codec'].upper()} {k}" for k in src["convert"]))
+    src.update(token=secrets.token_urlsafe(16), seen=time.time(), mime=MIME.get(Path(src["name"]).suffix.lower(), "video/mp4"))
+    watching.clear()
+    watching[src["token"]] = src
+    return {"token": src["token"], "title": src["title"], "duration": src.get("duration") or 0, "direct": src["direct"], "start": start,
+            "about": src.get("about") or {}, "poster": src.get("thumbnail") or "", "torrent": bool(src.get("torrent")), **watch_subs(src)}
+
+
+def watch_subs(src):
+    """What the page's player has to know about the subtitles; `subs` changes when the file to show does."""
+    return {"subs": src["subs"].name if src.get("subs") else "", "subDelay": src.get("sub_delay", 0), "note": src.get("note", "")}
+
+
+def watch_cmd(src, start):
+    """start: where watch_at() said the stream can start."""
+    if "video" in src["convert"]:
+        # hardware H.264, at most 1080p: 8 Mb/s is too little for 4K. ponytail: HDR is not tone-mapped, its colours come out dull.
+        video = ["-vf", "scale=-2:'min(1080,ih)'", "-c:v", "h264_videotoolbox", "-b:v", "8M", "-pix_fmt", "yuv420p"]
+    else:
+        video = ["-c:v", "copy"]
+        if start and src["vcodec"]:
+            start += 0.2  # ffmpeg aims a little before the second asked for (B-frames): asked for a key frame, it would start on the one before
+    audio = ["-c:a", "aac", "-ac", "2", "-b:a", "192k"] if "audio" in src["convert"] else ["-c:a", "copy"]
+    return (["ffmpeg", "-v", "error"] + ffmpeg_inputs(src["inputs"], start, ":0") + video + audio
+            + ["-movflags", "frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1"])
+
+
+def watch_at(src, t):
+    """Second of the movie at which a stream asked for at `t` really starts. A copied picture can only start on a key
+    frame: the one before t, up to several seconds earlier. The page needs the true figure, to show the right time and
+    to place the subtitles."""
+    t = max(float(t), 0)
+    if not t or "video" in src["convert"] or not src["vcodec"]:
+        return t  # a re-encoded picture starts exactly where asked
+    u, headers = src["inputs"][0]
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", *(["-headers", headers] if u.startswith("http") else []), "-select_streams", "v:0",
+                            "-read_intervals", f"{t}%+#1", "-show_entries", "packet=pts_time", "-of", "csv=p=0", u],
+                           capture_output=True, text=True, timeout=20)
+        key = float(r.stdout.split()[0].strip(","))
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        return t
+    return key if 0 <= key <= t else t
+
+
+def vtt(text, shift=0):
+    """.srt text → WebVTT, every cue moved by `shift` seconds (cues that end before 0 are dropped)."""
+    def stamp(x):
+        ms = round(max(x, 0) * 1000)
+        return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02}.{ms % 1000:03}"
+    return "WEBVTT\n\n" + "\n".join(f"{stamp(a + shift)} --> {stamp(b + shift)}\n{re.sub(r'{\\[^}]*}', '', x).strip()}\n"
+                                    for a, b, x in parse_srt(text) if b + shift > 0)
+
+
+def watch_report(a):
+    """Every 10 s the page says where its player is: counts the time played, records the position of a catalog movie,
+    and answers with what may have changed meanwhile (subtitles corrected by the check, state of the torrent)."""
+    src = watching.get(str(a.get("token")))
+    if not src:
+        raise LookupError
+    now, pos = time.time(), max(float(a.get("position") or 0), 0)
+    duration = src.get("duration") or int(float(a.get("duration") or 0))
+    if a.get("playing") and now - src.get("counted", 0) >= 9:  # the figures cannot be inflated by reporting more often
+        src["counted"] = now
+        count_playback(src, src["title"])
+    src["seen"] = now
+    if src.get("subs") and isinstance(a.get("subDelay"), (int, float)) and a.get("subs") == src["subs"].name:
+        src["sub_delay"] = round(min(max(a["subDelay"], -120), 120), 1)
+    with progress_lock:
+        p = progress.get(src.get("film"))
+        if p:
+            p.update(position=int(pos), duration=duration or p["duration"], updated=int(now))
+            if src.get("subs"):
+                p["play"]["subDelay"] = src.get("sub_delay", 0)
+            save_progress()
+    out = watch_subs(src)
+    if src.get("torrent"):
+        try:
+            out["torrent"] = torrent_health(src, duration, pos)
+        except Exception:
+            pass
+    return out
+
+
+def unwatch(a):
+    """The page stopped its player, or is being closed: keeps the last position, then lets go of the source."""
+    if str(a.get("token")) in watching:
+        if "position" in a:
+            watch_report({**a, "playing": False})
+        watching.clear()
+        wjob.update(error="", detail="")
+        only_torrent()
 
 
 # --- Settings: list of Stremio add-ons (catalog, sources, subtitles), kept in config.json
@@ -1256,7 +1446,15 @@ def post_action(path, a):
     if path == "/api/play":
         return launch(a.get("title") or "Movie", play, a)
     if path == "/api/dismiss":
-        return job.update(error="", detail="")
+        return (wjob if a.get("watch") else job).update(error="", detail="")
+    if path == "/api/watch":
+        return launch(a.get("title") or Path(str(a.get("path") or "")).name or "Video", watch, a, into=wjob)
+    if path == "/api/watchat":
+        return {"start": watch_at(watching[str(a.get("token"))], a.get("t") or 0)}
+    if path == "/api/watching":
+        return watch_report(a)
+    if path == "/api/unwatch":
+        return unwatch(a)
     if path == "/api/config":
         return set_config(a)
     if path == "/api/app":
@@ -1333,6 +1531,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.media(head)
         if not self.is_local():
             return self.lan_login() or self.reply(403, {"error": "access denied: open the link with the key (?key=…)"})
+        if self.path.startswith("/watch/"):
+            return self.watch(head)
         if self.path.startswith("/api/qr.png"):
             try:
                 return self.reply(200, qr_png(lan_links()[0]), "image/png")
@@ -1356,6 +1556,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/config": get_config,
             "/api/links": lambda: {"links": lan_links()},
             "/api/job": lambda: {k: job[k] for k in ("busy", "title", "steps", "error", "detail")},
+            "/api/watchjob": lambda: {k: wjob[k] for k in ("busy", "title", "steps", "error", "detail")},
             "/api/tvs": lambda: {"tvs": tvlib.discover(), "current": current_tv.ip if current_tv else None},
             "/api/channels": lambda: need_tv().channels(),
             "/api/progress": lambda: {"films": sorted(progress.values(), key=lambda p: -p["updated"])},
@@ -1387,6 +1588,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "not found"})
         if isinstance(p, dict):
             return self.live(p, head) if "inputs" in p else self.proxy(p, head)
+        self.file(p, head)
+
+    def watch(self, head):
+        """/watch/<token>/file | stream?t=<second> | subs.vtt?shift=<seconds>: the video the page's own player is playing."""
+        u = urlparse(self.path)
+        parts, q = u.path.split("/"), parse_qs(u.query)
+        src, what = watching.get(parts[2]) if len(parts) > 3 else None, parts[-1]
+        try:
+            number = float((q.get("t") or q.get("shift") or ["0"])[0])
+        except ValueError:
+            src = None
+        if src and what == "subs.vtt" and src.get("subs"):
+            return self.reply(200, vtt(src["subs"].read_text("utf-8", "replace"), number).encode(), "text/vtt; charset=utf-8")
+        if src and what == "file" and src["direct"]:
+            return self.file(src["file"], head) if src.get("file") else self.proxy(src, head)
+        if src and what == "stream":
+            still = lambda: watched() is src
+            return self.pipe(watch_cmd(src, max(number, 0)), "video/mp4", head, still, lambda *why: wjob.update(zip(("error", "detail"), why)))
+        self.reply(404, {"error": "not found"})
+
+    def file(self, p, head):
         size = p.stat().st_size
         try:
             rng = parse_range(self.headers.get("Range"), size)
@@ -1455,8 +1677,13 @@ class Handler(BaseHTTPRequestHandler):
                     fail("The torrent stopped sending data.", "no data from TorrServer for two minutes")
 
     def live(self, live, head):
+        self.pipe(live_cmd(live), "video/mpeg", head, lambda: current() is live, fail)
+
+    def pipe(self, cmd, ctype, head, still, failed):
+        """Sends what ffmpeg produces, as long as the other end reads it. still(): this is still the video being played;
+        failed(sentence, detail): where to report a stream that broke."""
         self.send_response(200)
-        self.send_header("Content-Type", "video/mpeg")
+        self.send_header("Content-Type", ctype)
         self.send_header("transferMode.dlna.org", "Streaming")
         self.send_header("contentFeatures.dlna.org", LIVE_FLAGS)
         self.send_header("Connection", "close")  # unknown length: end of stream = close
@@ -1464,7 +1691,7 @@ class Handler(BaseHTTPRequestHandler):
         if head:
             return
         with tempfile.TemporaryFile() as errors:
-            proc = subprocess.Popen(live_cmd(live), stdout=subprocess.PIPE, stderr=errors)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors)
             sent, dropped = 0, False
             try:
                 while chunk := proc.stdout.read1(1 << 16):
@@ -1480,8 +1707,8 @@ class Handler(BaseHTTPRequestHandler):
             if log:
                 print("ffmpeg:", log[-2000:], flush=True)
             # ffmpeg ended by itself: a failure if it produced nothing or reported an error, the end of the video otherwise
-            if not dropped and current() is live and (sent == 0 or (code not in (0, -9) and log)):
-                fail(*stream_error(log))
+            if not dropped and still() and (sent == 0 or (code not in (0, -9) and log)):
+                failed(*stream_error(log))
 
 
 def stream_error(log):
@@ -1511,6 +1738,19 @@ def selftest():
     assert "refused" in stream_error("x\n[https @ 0x2] Server returned 403 Forbidden (access denied)")[0]
     assert plain_error(ValueError("unrecognized link")) == ("Unrecognized link.", "")
     assert plain_error(RuntimeError("yt-dlp failed: ERROR: gone"))[1] == "ERROR: gone"
+    # browser player: what is copied, what is re-encoded, where subtitles land after a seek
+    assert browser_convert("hevc", "ac3") == ["video", "audio"] and browser_convert("h264", "mp3") == [] and browser_convert("h264", "") == []
+    cmd = " ".join(watch_cmd({"inputs": [("/a.mkv", "")], "convert": ["audio"], "vcodec": "h264"}, 90))
+    assert "-ss 90.2 -i /a.mkv -map 0:v:0? -map 0:a:0? -c:v copy -c:a aac" in cmd and cmd.endswith("-f mp4 pipe:1"), cmd
+    assert "-ss 90 -i" in " ".join(watch_cmd({"inputs": [("/a.mkv", "")], "convert": ["video"], "vcodec": "hevc"}, 90))
+    assert watch_at({"convert": ["video"], "vcodec": "hevc"}, 61.5) == 61.5 and watch_at({"convert": [], "vcodec": ""}, 5) == 5
+    assert vtt("1\n00:00:01,000 --> 00:00:02,500\n{\\an8}<i>Hi</i>\n\n2\n00:01:00,000 --> 00:01:02,000\nLater\n", -50) \
+        == "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nLater\n"
+    assert vtt("1\n00:00:01,000 --> 00:00:02,500\n{\\an8}<i>Hi</i>\n").endswith("00:00:01.000 --> 00:00:02.500\n<i>Hi</i>\n")
+    # a launch for the browser reports to its own stages, not to the TV's
+    globals()["only_torrent"] = lambda keep=None: None  # the test must not drop the torrents of a server that is running
+    launch("here", lambda: step("for the browser"), into=wjob)
+    assert wjob["steps"] == [["for the browser", ""]] and wjob["title"] == "here" and not job["steps"] and not job["title"], (wjob, job)
     step("a"); step("b", "1"); step("b", "2")
     assert job["steps"] == [["a", ""], ["b", "2"]]
     job["steps"].clear()
