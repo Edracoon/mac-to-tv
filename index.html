@@ -92,6 +92,9 @@ body[data-where=here] .tvonly{display:none}
 #ptitle{position:absolute;top:0;left:0;right:0;padding:16px 20px;font-size:18px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #big{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:76px;height:76px;border-radius:50%;border:0;background:#000a;color:#fff;font-size:30px;padding:0;backdrop-filter:blur(4px)}
 #big:hover{background:var(--accent)}
+/* the centre button shows while paused, and for a moment after Play; while it plays, a click on the picture pauses */
+#big{transition:opacity .25s}
+#player.playing:not(.flash) #big{opacity:0;pointer-events:none}
 #idle{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;color:#bbb;padding:24px;font-size:16px}
 #player.idle #idle{display:flex}
 #player.idle #big,#player.idle #bar,#player.idle #ptitle{display:none}
@@ -681,6 +684,7 @@ const STATES = { PLAYING: 'Playing', PAUSED_PLAYBACK: 'Paused', STOPPED: 'On', N
 function paint() {
   const playing = state === 'PLAYING' || state === 'TRANSITIONING';
   document.querySelectorAll('#pp use, #big use, #mpp use').forEach(u => u.setAttribute('href', playing ? '#i-pause' : '#i-play'));
+  $('#player').classList.toggle('playing', playing);
   if (!seeking) $('#seek').value = pos;
   const shown = seeking ? +$('#seek').value : pos;
   $('#seek').style.setProperty('--p', (dur ? shown / dur * 100 : 0) + '%');
@@ -783,7 +787,16 @@ function nudgeSubs(delta) {
   clearTimeout(subTimer);
   subTimer = setTimeout(async () => { const d = subPending; subPending = 0; if (d) await act('subdelay', { delta: d }, 'Subtitles adjusted'); }, 900);
 }
-const toggle = () => here ? (vid.paused ? vid.play().catch(() => {}) : vid.pause()) : act('transport', { action: state === 'PLAYING' || state === 'TRANSITIONING' ? 'pause' : 'play' });
+let flashTimer;
+function toggle() {
+  const playing = here ? !vid.paused : state === 'PLAYING' || state === 'TRANSITIONING';
+  if (!playing) {  // Play pressed: the centre button stays a moment, as a pause button, then leaves the picture alone
+    $('#player').classList.add('flash');
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => $('#player').classList.remove('flash'), 1500);
+  }
+  return here ? (playing ? vid.pause() : vid.play().catch(() => {})) : act('transport', { action: playing ? 'pause' : 'play' });
+}
 const seekTo = t => { pos = Math.min(Math.max(t, 0), dur || t); paint(); here ? hereSeek(pos) : act('transport', { action: 'seek', seconds: pos }); };
 const jump = d => seekTo(pos + d);
 $('#pp').addEventListener('click', toggle);
@@ -963,17 +976,20 @@ $('#totv').addEventListener('click', async () => {
 // leaving the page: the server must not keep a torrent going for nobody
 addEventListener('pagehide', () => { if (here) navigator.sendBeacon('/api/unwatch', new Blob([JSON.stringify(hereState(here))], { type: 'application/json' })); });
 // the controls fade after 3 s of playback without a move; a first touch on a quiet player only brings them back
+// (a mouse click pauses right away: the pointer moving over the picture has already brought them back)
 let quietTimer, wasQuiet = false;
 function wake() {
   $('#player').classList.remove('quiet');
   clearTimeout(quietTimer);
   quietTimer = setTimeout(() => { if (here && !vid.paused && $('#volpop').hidden) $('#player').classList.add('quiet'); }, 3000);
 }
-$('#player').addEventListener('pointerdown', () => { wasQuiet = $('#player').classList.contains('quiet'); }, true);
+$('#player').addEventListener('pointerdown', e => { wasQuiet = e.pointerType !== 'mouse' && $('#player').classList.contains('quiet'); }, true);
 ['pointermove', 'pointerdown', 'click'].forEach(e => $('#player').addEventListener(e, wake));
 vid.addEventListener('play', wake);
 vid.addEventListener('pause', wake);
 vid.addEventListener('click', () => { if (!wasQuiet) toggle(); });
+// on the TV there is no picture here, but the middle of the player works the same
+$('#player').addEventListener('click', e => { if (!here && active && e.target === e.currentTarget) toggle(); });
 vid.addEventListener('dblclick', () => $('#fs').click());
 
 async function castLink(b, mode) {
