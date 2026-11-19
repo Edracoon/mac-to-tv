@@ -24,6 +24,9 @@ Chromecast, Apple TV / AirPlay and Fire TV are not supported (no DLNA player).
 Three files: `server.py` (video sources and API, Python with no pip dependency), `tv.py` (TV discovery and control)
 and `index.html` (the page).
 
+The project is a media center first; the remote for other brands grows by contribution. No `pip` dependency and no
+build step: see [the decision](docs/adr/0001-media-center-first.md).
+
 ## Installing on a new Mac
 
 Requirements: macOS, [Homebrew](https://brew.sh), and the Mac on the same local network as the TV.
