@@ -21,8 +21,8 @@ Chromecast, Apple TV / AirPlay and Fire TV are not supported (no DLNA player).
 
 **Your TV is not in the list?** Test it and add it: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Three files: `server.py` (video sources and API, Python with no pip dependency), `tv.py` (TV discovery and control)
-and `index.html` (the page).
+Five files, Python with no pip dependency: `server.py` (playback and API), `sources.py` (links, torrents, add-on
+sources), `subs.py` (subtitles and their sync check), `tv.py` (TV discovery and control) and `index.html` (the page).
 
 The project is a media center first; the remote for other brands grows by contribution. No `pip` dependency and no
 build step: see [the decision](docs/adr/0001-media-center-first.md).
@@ -215,7 +215,7 @@ the player shows what is going on instead:
 - a line under the player: connected sources, download speed, speed the movie needs, and time buffered;
 - a warning when the source is slower than the movie. Pausing lets the buffer grow, as in other streaming players.
 
-TorrServer holds up to 512 MB of the movie in memory ahead of playback (`TORRENT_CACHE` in `server.py`).
+TorrServer holds up to 512 MB of the movie in memory ahead of playback (`TORRENT_CACHE` in `sources.py`).
 
 **One download at a time, nothing in the background.** Every other torrent is dropped before a torrent starts, after
 every launch (successful or not) and when playback is stopped (`only_torrent()`). The background subtitle check reads
@@ -280,7 +280,7 @@ it, including one that did not start the launch. `POST /api/dismiss` clears a fa
 
 | Folder | Contents | Copy to another Mac? |
 |---|---|---|
-| `server.py`, `tv.py`, `index.html`, `service.sh`, `README.md`, `CONTRIBUTING.md` | the application | yes |
+| `server.py`, `sources.py`, `subs.py`, `tv.py`, `index.html`, `service.sh`, `README.md`, `CONTRIBUTING.md` | the application | yes |
 | `config.json` | chosen TV and add-on list | yes, if you want to keep them |
 | `lan-key.txt` | local network access key (created by `--lan`) | no, it is recreated |
 | `progress.json` | movies started or finished and their position | yes, if you want to keep the history |
