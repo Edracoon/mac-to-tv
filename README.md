@@ -215,7 +215,7 @@ the player shows what is going on instead:
 - a line under the player: connected sources, download speed, speed the movie needs, and time buffered;
 - a warning when the source is slower than the movie. Pausing lets the buffer grow, as in other streaming players.
 
-TorrServer holds up to 512 MB of the movie in memory ahead of playback (`TORRENT_CACHE` in `sources.py`).
+TorrServer holds up to 512 MB of the movie in memory ahead of playback (`TorrServer.CACHE` in `sources.py`).
 
 **One download at a time, nothing in the background.** Every other torrent is dropped before a torrent starts, after
 every launch (successful or not) and when playback is stopped (`only_torrent()`). The background subtitle check reads
@@ -242,7 +242,7 @@ resume positions, figures) and nothing after it:
 
 | | On the TV | Here |
 |---|---|---|
-| Server state | `shared`, `job`, addresses under `/media/<token>/` (open to the TV) | `watching`, `wjob`, addresses under `/watch/<token>/` (the page only) |
+| Server state | the `TVPlayer` object, addresses under `/media/<token>/` (open to the TV) | the `BrowserPlayer` object, addresses under `/watch/<token>/` (the page only) |
 | MP4 with H.264 + AAC/MP3 | served as a file | served as a file: seeking is instant |
 | MKV, YouTube, AC3/DTS sound, HEVC, AV1… | file, or MPEG-TS live stream | fragmented MP4 from `ffmpeg`: H.264 picture copied, anything else re-encoded (hardware H.264, 1080p at most), sound to stereo AAC |
 | Seeking in a stream | restarts the stream | restarts the stream (`/api/watchat` says where it really starts: a copied picture starts on the key frame before) |

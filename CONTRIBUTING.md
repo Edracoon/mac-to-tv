@@ -41,10 +41,10 @@ Playback relies on standard DLNA, but each player has its own requirements. Ever
 
 | Symptom | Where to look |
 |---|---|
-| The TV rejects the video as soon as it is sent | `play_on_tv()`: DIDL-Lite metadata, MIME type (`MIME` table in `sources.py`), `DLNA_FLAGS` |
+| The TV rejects the video as soon as it is sent | `TVPlayer.send()`: DIDL-Lite metadata, MIME type (`MIME` table in `sources.py`), `DLNA_FLAGS` |
 | The video starts but pause or seek are refused | `Handler.media()`: HTTP headers, `Range` responses |
 | Links (YouTube…) do not work, files do | `live_cmd()` and `Handler.live()`: MPEG-TS stream with no known length |
-| The displayed state is wrong | `status()`: state names returned by `GetTransportInfo` |
+| The displayed state is wrong | `TVPlayer.status()`: state names returned by `GetTransportInfo` |
 
 To understand what the TV asks for, start the server with `> server.log 2>&1`: every request from the TV is logged there
 (`TV GET film.mkv Range=bytes=…`), as well as `ffmpeg` errors.
