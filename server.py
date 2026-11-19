@@ -1003,7 +1003,10 @@ def play(a):
             old = progress.get(film["id"], {})
             progress[film["id"]] = {"id": film["id"], "title": title, "poster": film.get("poster"),
                                     "play": {k: a[k] for k in ("infoHash", "fileIdx", "filename", "url", "sources", "subs", "subDelay", "title", "poster") if a.get(k) is not None},
-                                    "position": start, "duration": old.get("duration", 0), "updated": int(time.time())}
+                                    "position": start, "duration": old.get("duration", 0), "updated": int(time.time()),
+                                    # an episode: its series (id and name), to group and resume by series on the page
+                                    **{k: str(film[k])[:200] for k in ("series", "show") if film.get(k)},
+                                    **{k: int(film[k]) for k in ("season", "episode") if isinstance(film.get(k), int)}}
             save_progress()
     alts = [u for u in a.get("subsAlt") or [] if isinstance(u, str) and re.match(r"https?://", u)]
     return play_url(url, name, title, size, a.get("subs"), a.get("poster"), film.get("id"), start, float(a.get("subDelay") or 0), alts,

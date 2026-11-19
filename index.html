@@ -29,8 +29,11 @@ main{max-width:1180px;margin:0 auto;padding:20px 16px 96px}
 .tile span{min-width:0}
 .tile b{display:block;font-size:16px}
 .tile small{color:var(--muted);font-size:13px}
-.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(160px,45%),1fr));gap:12px}
-.fig{padding:14px 16px;border-radius:14px;background:var(--card);border:1px solid var(--line)}
+/* one card; the figures are separated by lines, whatever the number of columns: each cell draws its left and top
+   line, and the wrapper hides the ones on the outer edge */
+.figwrap{overflow:hidden}
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,50%),1fr));margin:-1px 0 0 -1px}
+.fig{padding:12px 16px;border-left:1px solid var(--line);border-top:1px solid var(--line)}
 .fig b{display:block;font-size:26px;font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums}
 .fig span{color:var(--muted);font-size:13px}
 .head{margin-bottom:12px}
@@ -191,6 +194,12 @@ body.hasmini #fplaybar{bottom:74px}
 .stream b{display:block;font-size:13px}
 .stream span{font-size:13px;color:var(--muted)}
 #addons li small{display:block}
+#feps{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr));gap:8px;max-height:420px;overflow:auto}
+#feps .stream{margin:0;position:relative;padding-right:34px}
+#feps .stream .ic{position:absolute;top:10px;right:10px;color:var(--ok);font-size:17px}
+#feps .stream.done b{color:var(--muted)}
+#feps .prog{margin-top:6px}
+#fepcount{text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
 .stream.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 #resume{display:flex;gap:12px;overflow-x:auto;padding:4px 2px 8px}
 #resume .card{flex:0 0 116px}
@@ -249,15 +258,17 @@ body.hasmini #toast{bottom:76px}
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></symbol>
   <symbol id="i-movie" viewBox="0 0 24 24"><path d="m18 4 2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4h-4z"/></symbol>
+  <symbol id="i-series" viewBox="0 0 24 24"><path d="M21 6h-7.59l3.3-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 13H3V8h18v11z"/></symbol>
   <symbol id="i-video" viewBox="0 0 24 24"><path d="M21 3H3a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 14H3V5h18v12zM10 8v6l5-3-5-3z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></symbol>
-  <symbol id="i-remote" viewBox="0 0 24 24"><path d="M15 9H9a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V10a1 1 0 0 0-1-1zm-3 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zM7.05 6.05l1.41 1.41a5 5 0 0 1 7.08 0l1.41-1.41a7 7 0 0 0-9.9 0zM12 1a10.97 10.97 0 0 0-7.78 3.22l1.41 1.41a9 9 0 0 1 12.74 0l1.41-1.41A10.97 10.97 0 0 0 12 1z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.48-.41h-3.84a.5.5 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.59.22L2.74 8.87a.5.5 0 0 0 .12.61l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61l-2.01-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
 </defs></svg>
 <nav id="nav">
   <div id="tabs">
     <a href="#home" data-view="home">Home</a>
     <a href="#movies" data-view="movies">Movies</a>
+    <a href="#series" data-view="series">Series</a>
     <a href="#youtube" data-view="youtube">YouTube</a>
     <a href="#files" data-view="files">Files</a>
     <a href="#settings" data-view="settings">Settings</a>
@@ -269,16 +280,23 @@ body.hasmini #toast{bottom:76px}
   <div class="view" id="v-home" hidden>
     <div class="tiles">
       <button class="tile" data-go="movies" style="--t:#e5484d"><i><svg class="ic"><use href="#i-movie"/></svg></i><span><b>Movies</b><small>Catalog, sources, subtitles</small></span></button>
+      <button class="tile" data-go="series" style="--t:#8e6fe0"><i><svg class="ic"><use href="#i-series"/></svg></i><span><b>Series</b><small>Seasons and episodes</small></span></button>
       <button class="tile" data-go="youtube" style="--t:#e8a317"><i><svg class="ic"><use href="#i-video"/></svg></i><span><b>YouTube</b><small>Search, or paste any link</small></span></button>
       <button class="tile" data-go="files" style="--t:#3e8fe0"><i><svg class="ic"><use href="#i-folder"/></svg></i><span><b>Files</b><small>Videos on this Mac</small></span></button>
-      <button class="tile" id="tremote" style="--t:#2e9d5b"><i><svg class="ic"><use href="#i-remote"/></svg></i><span><b>Remote</b><small>Power, volume, picture</small></span></button>
+      <button class="tile" data-go="settings" style="--t:#2e9d5b"><i><svg class="ic"><use href="#i-settings"/></svg></i><span><b>Settings</b><small>TV, add-ons, other devices</small></span></button>
     </div>
-    <div class="figs">
-      <div class="fig"><b id="gtotal">–</b><span>played on the TV</span></div>
-      <div class="fig"><b id="gweek">–</b><span>in the last 7 days</span></div>
-      <div class="fig"><b id="gfilms">–</b><span id="gfilmsl">movies finished</span></div>
-      <div class="fig"><b id="gvids">–</b><span>videos played</span></div>
-    </div>
+    <section>
+      <h2>Your screen time, in numbers</h2>
+      <div class="figwrap">
+        <div class="figs">
+          <div class="fig"><b id="gtotal">–</b><span>played on the TV</span></div>
+          <div class="fig"><b id="gweek">–</b><span>in the last 7 days</span></div>
+          <div class="fig"><b id="gfilms">–</b><span id="gfilmsl">movies finished</span></div>
+          <div class="fig"><b id="gepis">–</b><span id="gepisl">episodes watched</span></div>
+          <div class="fig"><b id="gvids">–</b><span>videos played</span></div>
+        </div>
+      </div>
+    </section>
     <section id="resumebox" hidden>
       <div class="row head"><h2>Continue or rewatch</h2><button data-go="movies">All movies</button></div>
       <div id="resume"></div>
@@ -291,6 +309,10 @@ body.hasmini #toast{bottom:76px}
       <div class="row head"><h2>Popular movies</h2><button data-go="movies">All movies</button></div>
       <div id="popular" class="grid"></div>
     </section>
+    <section id="popsbox" hidden>
+      <div class="row head"><h2>Popular series</h2><button data-go="series">All series</button></div>
+      <div id="popseries" class="grid"></div>
+    </section>
   </div>
 
   <div class="view" id="v-movies" hidden>
@@ -301,7 +323,7 @@ body.hasmini #toast{bottom:76px}
         <select id="genre" title="Genre"></select>
       </form>
       <div id="grid"></div>
-      <button id="more" hidden>More movies</button>
+      <button id="more" hidden>Show more</button>
     </section>
   </div>
 
@@ -317,6 +339,10 @@ body.hasmini #toast{bottom:76px}
     <section>
       <p id="fdesc"></p>
       <div id="fcast" class="muted"></div>
+    </section>
+    <section id="fepbox" hidden>
+      <div class="row head"><h2>Episodes <span id="fepcount"></span></h2><select id="fseason" title="Season"></select></div>
+      <div id="feps"></div>
     </section>
     <section>
       <h2>Subtitles</h2>
@@ -840,10 +866,10 @@ const jget = u => fetch(u).then(r => { if (!r.ok) throw new Error('HTTP ' + r.st
 const LANGS = { fre: 'Français', eng: 'English', spa: 'Español', ger: 'Deutsch', ita: 'Italiano', por: 'Português' };
 let addons = [], cats = [], skip = 0, films = {};
 
-function supports(a, res, id) {
+function supports(a, res, id, type = 'movie') {
   return !!a.manifest && a.manifest.resources.some(r => {
     const types = r.types || a.manifest.types || [], pre = r.idPrefixes || a.manifest.idPrefixes;
-    return (r.name || r) === res && types.includes('movie') && (!id || !pre || pre.some(p => id.startsWith(p)));
+    return (r.name || r) === res && types.includes(type) && (!id || !pre || pre.some(p => id.startsWith(p)));
   });
 }
 const extra = (c, name) => (c.extra || []).find(e => e.name === name);
@@ -859,22 +885,36 @@ async function loadAddons() {
     return el('li', {}, el('span', {}, a.manifest ? a.manifest.name : a.url, el('small', { className: 'muted', textContent: `${what || 'other'} — ${a.url}` })),
       el('button', { textContent: 'Remove', onclick: () => saveAddons(addons.filter(x => x !== a).map(x => x.url)) }));
   }));
-  cats = addons.flatMap(a => supports(a, 'catalog') ? (a.manifest.catalogs || []).filter(c => c.type === 'movie').map(c => ({ a, c })) : []);
+  setCats();
+  loadPopular('movie', '#popbox', '#popular');
+  loadPopular('series', '#popsbox', '#popseries');
+}
+// The catalog view serves two tabs: movies and series (ctype)
+let ctype = 'movie';
+const catalogs = type => addons.flatMap(a => supports(a, 'catalog', null, type) ? (a.manifest.catalogs || []).filter(c => c.type === type).map(c => ({ a, c })) : []);
+function setCats() {
+  cats = catalogs(ctype);
+  $('#q').value = ''; $('#q').placeholder = ctype === 'series' ? 'Search for a series…' : 'Search for a movie…';
   $('#cat').replaceChildren(...cats.map(({ a, c }, i) => el('option', { value: i, textContent: `${c.name || c.id} · ${a.manifest.name}` })));
   catChanged();
-  loadPopular();
 }
-const filmCard = m => el('button', { className: 'card', title: m.name, onclick: () => openFilm(m.id) },
+function setType(type) {
+  if (type === ctype) return;
+  ctype = type;
+  $('#grid').replaceChildren();
+  ready.then(setCats);
+}
+const filmCard = m => el('button', { className: 'card', title: m.name, onclick: () => openFilm(m.id, m.type) },
   el('img', { src: m.poster || '', alt: '', loading: 'lazy' }), el('div', { textContent: m.name }),
   el('small', { textContent: [m.releaseInfo || m.year, m.imdbRating && '★ ' + m.imdbRating].filter(Boolean).join(' · ') }));
-async function loadPopular() {  // home: the first catalog, as it comes
-  const cur = cats[0];
+async function loadPopular(type, box, grid) {  // home: the first catalog of each kind, as it comes
+  const cur = catalogs(type)[0];
   if (!cur) return;
   try {
-    const { metas = [] } = await jget(`${cur.a.url}/catalog/movie/${cur.c.id}.json`);
-    metas.forEach(m => { films[m.id] = films[m.id] || m; });
-    $('#popular').replaceChildren(...metas.slice(0, 24).map(filmCard));
-    $('#popbox').hidden = !metas.length;
+    const { metas = [] } = await jget(`${cur.a.url}/catalog/${type}/${cur.c.id}.json`);
+    metas.forEach(m => { m.type = type; films[m.id] = films[m.id] || m; });
+    $(grid).replaceChildren(...metas.slice(0, 16).map(filmCard));
+    $(box).hidden = !metas.length;
   } catch {}
 }
 const saveAddons = list => api('config', { addons: list }).then(loadAddons).catch(e => toast('Error: ' + e.message));
@@ -897,12 +937,13 @@ async function loadFilms(reset) {
   else if (extra(cur.c, 'genre') && $('#genre').value) ex.push('genre=' + encodeURIComponent($('#genre').value));
   if (skip) ex.push('skip=' + skip);
   try {
-    const { metas = [] } = await jget(`${cur.a.url}/catalog/movie/${cur.c.id}${ex.length ? '/' + ex.join('&') : ''}.json`);
-    metas.forEach(m => { films[m.id] = m; });
+    const type = ctype, { metas = [] } = await jget(`${cur.a.url}/catalog/${type}/${cur.c.id}${ex.length ? '/' + ex.join('&') : ''}.json`);
+    if (type !== ctype) return;  // the other tab was opened in the meantime
+    metas.forEach(m => { m.type = type; films[m.id] = m; });
     $('#grid').append(...metas.map(filmCard));
     skip += metas.length;
     $('#more').hidden = q || metas.length < 20 || !extra(cur.c, 'skip');
-    if (!$('#grid').children.length) $('#grid').append(el('p', { className: 'muted', textContent: 'No movies found.' }));
+    if (!$('#grid').children.length) $('#grid').append(el('p', { className: 'muted', textContent: 'Nothing found.' }));
   } catch (e) { toast('Catalog unreachable: ' + e.message); }
 }
 $('#cat').addEventListener('change', catChanged);
@@ -941,7 +982,8 @@ async function loadProgress() {
   const list = (await api('progress').catch(() => ({ films: [] }))).films;
   seen = Object.fromEntries(list.map(p => [p.id, p]));
   $('#resumebox').hidden = !list.length;
-  $('#resume').replaceChildren(...list.map(p => el('button', { className: 'card', title: p.title, onclick: () => openFilm(p.id) },
+  const had = new Set(), latest = list.filter(p => !had.has(p.series || p.id) && had.add(p.series || p.id));  // the list comes most recent first
+  $('#resume').replaceChildren(...latest.map(p => el('button', { className: 'card', title: p.title, onclick: () => openFilm(p.id) },
     el('img', { src: p.poster || '', alt: '', loading: 'lazy' }),
     el('div', { className: 'prog' }, el('i', { style: `width:${finished(p) ? 100 : p.duration ? p.position / p.duration * 100 : 0}%` })),
     el('div', { textContent: p.title }),
@@ -954,39 +996,37 @@ function setUrl(params) {
   const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   history.replaceState(null, '', location.pathname + (q.size ? '?' + q : ''));
 }
-const openFilm = id => go(location.pathname + '?film=' + encodeURIComponent(id));
-let curFilm = null;  // the movie whose page is shown; answers that arrive for another one are dropped
+// A movie is opened by its id; an episode by "<series id>:<season>:<episode>" (what the add-ons call it)
+function openFilm(id, type) {
+  const parts = String(id).split(':'), ep = parts.length >= 3 ? parts.slice(-2).join(':') : '';
+  const q = new URLSearchParams({ film: ep ? parts.slice(0, -2).join(':') : id });
+  if (ep || type === 'series') q.set('type', 'series');
+  if (ep) q.set('ep', ep);
+  go(location.pathname + '?' + q);
+}
+let curFilm = null, curVid = null;  // the page shown, and the video (movie or episode) chosen on it; late answers for others are dropped
 
 async function showFilm(id, fromUrl = {}) {
-  curFilm = id;
+  curFilm = id; curVid = null;
+  const type = fromUrl.type === 'series' ? 'series' : 'movie';
   $('#fname').textContent = '…';
   $('#fhead').style.backgroundImage = ''; $('#fposter').hidden = true;
   $('#finfo').textContent = $('#fdesc').textContent = $('#fcast').textContent = '';
-  $('#fstreams').replaceChildren('Looking for sources…');
-  $('#fsubs').replaceChildren(el('option', { value: '', textContent: 'No subtitles' }));
-  $('#fsubnote').hidden = true;
-  $('#fgo').hidden = true; $('#fstart').disabled = true; $('#fpicked').textContent = '';
-  await ready;
-  const still = () => curFilm === id;
-  if (!still()) return;
-  let meta = films[id] || (seen[id] && { id, name: seen[id].title, poster: seen[id].poster }) || { id, name: '…' };
-  const saved = seen[id];
-  // Source selected on arrival: the one from the last viewing, otherwise the one from the URL (a torrent can be restarted from its identifier alone)
-  let chosen = fromUrl.source ? { ...(saved && String(saved.play.infoHash || '').toLowerCase() === fromUrl.source.toLowerCase() ? saved.play : {}), infoHash: fromUrl.source, fileIdx: fromUrl.file === undefined ? undefined : +fromUrl.file }
-    : saved ? { ...saved.play } : null;
-  let picked = chosen ? 'Last used source' : '';
-  let subId = fromUrl.subs || '', subsLoaded = false;
-  const sync = () => { if (still()) setUrl({ film: id, source: chosen && chosen.infoHash, file: chosen && chosen.fileIdx, subs: subId }); };
-  let allSubs = [];
-  // Subtitles to send: { subs: preferred file, alts: other files in the same language, from most to least similar }
-  const pickSubs = file => {
-    if (!subsLoaded) return { subs: (chosen && chosen.subs) || '', alts: [] };
-    const v = $('#fsubs').value;
-    if (!v.startsWith('auto:')) return { subs: v, alts: [] };
-    const ranked = allSubs.filter(s => s.lang === v.slice(5)).map(s => [likeness(s, file), s]).sort((a, b) => b[0] - a[0]).map(x => x[1].url);
-    return { subs: ranked[0] || '', alts: ranked.slice(1) };
+  $('#fepbox').hidden = true;
+  $('#fback').textContent = type === 'series' ? '‹ Series' : '‹ Movies';
+  $('#fback').onclick = () => go(location.pathname + (type === 'series' ? '#series' : '#movies'));
+  const blank = text => {
+    $('#fstreams').replaceChildren(text);
+    $('#fsubs').replaceChildren(el('option', { value: '', textContent: 'No subtitles' }));
+    $('#fsubnote').hidden = true;
+    $('#fgo').hidden = true; $('#fstart').disabled = true; $('#fpicked').textContent = '';
   };
-
+  blank(type === 'series' ? 'Choose an episode.' : 'Looking for sources…');
+  await ready;
+  if (curFilm !== id) return;
+  const watched = Object.values(seen).filter(p => p.series === id).sort((a, b) => b.updated - a.updated);  // episodes of this series, latest first
+  let meta = films[id] || (seen[id] && { id, name: seen[id].title, poster: seen[id].poster })
+    || (watched[0] && { id, name: watched[0].show || watched[0].title, poster: watched[0].poster }) || { id, name: '…' };
   const paint = () => {
     $('#fname').textContent = meta.name;
     $('#fhead').style.backgroundImage = meta.background ? `url("${meta.background}")` : '';
@@ -996,97 +1036,162 @@ async function showFilm(id, fromUrl = {}) {
     const names = l => (l || []).slice(0, 5).join(', ');
     $('#fcast').textContent = [names(meta.director) && 'Directed by ' + names(meta.director), names(meta.cast) && 'With ' + names(meta.cast)].filter(Boolean).join(' · ');
   };
-  const resumeAt = saved && saved.position > 30 && !finished(saved) ? saved.position : 0;
-  // The play bar follows the selection: nothing can be played before a source is chosen
-  const showPick = () => {
-    $('#fgo').hidden = !resumeAt;
-    $('#fgo').textContent = `Resume at ${hms(resumeAt)}`;
-    $('#fstart').textContent = resumeAt ? 'Start over' : saved ? 'Watch again' : 'Play on TV';
-    $('#fstart').className = resumeAt ? '' : 'primary';
-    $('#fgo').disabled = $('#fstart').disabled = !chosen;
-    $('#fpicked').textContent = chosen ? picked : 'Choose a source below, then play.';
-  };
-  const launch = start => {
-    if (!chosen) return;
-    const source = chosen, { subs, alts } = pickSubs(source.filename);
-    sync();  // "back" from the player returns to this page with the same choices
-    act('play', { ...source, about: { description: meta.description, info: $('#finfo').textContent, credits: $('#fcast').textContent, poster: meta.poster }, title: meta.name, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
-      film: { id, poster: meta.poster }, start });
-  };
-  $('#fgo').onclick = () => launch(resumeAt);
-  $('#fstart').onclick = () => launch(0);
+  paint();
+  const metaAddon = addons.find(a => supports(a, 'meta', id, type));
+  const fetched = metaAddon ? jget(`${metaAddon.url}/meta/${type}/${id}.json`).then(r => { if (curFilm === id && r.meta) { meta = r.meta; paint(); } }).catch(() => {}) : Promise.resolve();
 
-  // Sources arrive add-on by add-on; they are kept so that the list can be sorted again
-  const items = [];
-  const subScore = file => {  // how well the chosen subtitles (or any, when none is chosen) fit this release
-    const v = $('#fsubs').value, pool = v.startsWith('auto:') ? allSubs.filter(s => s.lang === v.slice(5)) : v ? allSubs.filter(s => s.url === v) : allSubs;
-    return Math.max(-99, ...pool.map(s => likeness(s, file)));
-  };
-  const render = () => {
-    const by = $('#fsort').value;
-    if (by === 'subs') items.forEach(it => { it.subs = subScore(it.src.filename || it.text); });
-    const order = { quality: (a, b) => b.q - a.q || b.seeds - a.seeds, seeds: (a, b) => b.seeds - a.seeds,
-      size: (a, b) => a.bytes - b.bytes, subs: (a, b) => b.subs - a.subs || b.seeds - a.seeds }[by];
-    $('#fstreams').replaceChildren(...(order ? [...items].sort(order) : items).map(it => it.button));  // the sort is stable: ties keep the add-on order
-  };
-  try { $('#fsort').value = localStorage.sort || ''; } catch {}
-  $('#fsort').onchange = e => { try { localStorage.sort = e.target.value; } catch {} render(); };
-  $('#fsubs').onchange = e => { if ($('#fsort').value === 'subs') render(); subId = e.target.selectedOptions[0].dataset.id || ''; $('#fsubnote').hidden = !e.target.value; try { localStorage.subs = e.target.value.startsWith('auto:') ? e.target.value : ''; } catch {} sync(); };
+  // ---- One video (the movie, or the chosen episode): subtitles, sources, play bar ----
+  // ep: { s, e, name, text } for an episode
+  function showVideo(vid, fromUrl = {}, ep = null) {
+    curVid = vid;
+    const still = () => curFilm === id && curVid === vid;
+    blank('Looking for sources…');
+    const saved = seen[vid], tag = ep ? `S${ep.s}E${ep.e}` : '';
+    // Source selected on arrival: the one from the last viewing, otherwise the one from the URL (a torrent can be restarted from its identifier alone)
+    let chosen = fromUrl.source ? { ...(saved && String(saved.play.infoHash || '').toLowerCase() === fromUrl.source.toLowerCase() ? saved.play : {}), infoHash: fromUrl.source, fileIdx: fromUrl.file === undefined ? undefined : +fromUrl.file }
+      : saved ? { ...saved.play } : null;
+    let picked = chosen ? 'Last used source' : '';
+    let subId = fromUrl.subs || '', subsLoaded = false;
+    const sync = () => { if (still()) setUrl({ film: id, type: ep && 'series', ep: ep && `${ep.s}:${ep.e}`, source: chosen && chosen.infoHash, file: chosen && chosen.fileIdx, subs: subId }); };
+    let allSubs = [];
+    // Subtitles to send: { subs: preferred file, alts: other files in the same language, from most to least similar }
+    const pickSubs = file => {
+      if (!subsLoaded) return { subs: (chosen && chosen.subs) || '', alts: [] };
+      const v = $('#fsubs').value;
+      if (!v.startsWith('auto:')) return { subs: v, alts: [] };
+      const ranked = allSubs.filter(s => s.lang === v.slice(5)).map(s => [likeness(s, file), s]).sort((a, b) => b[0] - a[0]).map(x => x[1].url);
+      return { subs: ranked[0] || '', alts: ranked.slice(1) };
+    };
+    const resumeAt = saved && saved.position > 30 && !finished(saved) ? saved.position : 0;
+    // The play bar follows the selection: nothing can be played before a source is chosen
+    const showPick = () => {
+      $('#fgo').hidden = !resumeAt;
+      $('#fgo').textContent = `Resume at ${hms(resumeAt)}`;
+      $('#fstart').textContent = resumeAt ? 'Start over' : saved ? 'Watch again' : 'Play on TV';
+      $('#fstart').className = resumeAt ? '' : 'primary';
+      $('#fgo').disabled = $('#fstart').disabled = !chosen;
+      $('#fpicked').textContent = (tag && tag + ' · ') + (chosen ? picked : 'Choose a source below, then play.');
+    };
+    const launch = start => {
+      if (!chosen) return;
+      const source = chosen, { subs, alts } = pickSubs(source.filename);
+      sync();  // "back" from the player returns to this page with the same choices
+      const title = ep ? `${meta.name} — ${tag}${ep.name ? ' · ' + ep.name : ''}` : meta.name;
+      act('play', { ...source, title, poster: meta.background || meta.poster, subs: subs || undefined, subsAlt: alts, subDelay: subs && subs === source.subs ? source.subDelay : 0,
+        about: { description: (ep && ep.text) || meta.description, info: [tag, $('#finfo').textContent].filter(Boolean).join(' · '), credits: $('#fcast').textContent, poster: meta.poster },
+        film: { id: vid, poster: meta.poster, ...(ep ? { series: id, show: meta.name, season: ep.s, episode: ep.e } : {}) }, start });
+    };
+    $('#fgo').onclick = () => launch(resumeAt);
+    $('#fstart').onclick = () => launch(0);
 
-  paint(); showPick(); sync();
+    // Sources arrive add-on by add-on; they are kept so that the list can be sorted again
+    const items = [];
+    const subScore = file => {  // how well the chosen subtitles (or any, when none is chosen) fit this release
+      const v = $('#fsubs').value, pool = v.startsWith('auto:') ? allSubs.filter(s => s.lang === v.slice(5)) : v ? allSubs.filter(s => s.url === v) : allSubs;
+      return Math.max(-99, ...pool.map(s => likeness(s, file)));
+    };
+    const render = () => {
+      const by = $('#fsort').value;
+      if (by === 'subs') items.forEach(it => { it.subs = subScore(it.src.filename || it.text); });
+      const order = { quality: (a, b) => b.q - a.q || b.seeds - a.seeds, seeds: (a, b) => b.seeds - a.seeds,
+        size: (a, b) => a.bytes - b.bytes, subs: (a, b) => b.subs - a.subs || b.seeds - a.seeds }[by];
+      $('#fstreams').replaceChildren(...(order ? [...items].sort(order) : items).map(it => it.button));  // the sort is stable: ties keep the add-on order
+    };
+    try { $('#fsort').value = localStorage.sort || ''; } catch {}
+    $('#fsort').onchange = e => { try { localStorage.sort = e.target.value; } catch {} render(); };
+    $('#fsubs').onchange = e => { if ($('#fsort').value === 'subs') render(); subId = e.target.selectedOptions[0].dataset.id || ''; $('#fsubnote').hidden = !e.target.value; try { localStorage.subs = e.target.value.startsWith('auto:') ? e.target.value : ''; } catch {} sync(); };
 
-  const metaAddon = addons.find(a => supports(a, 'meta', id));
-  if (metaAddon) jget(`${metaAddon.url}/meta/movie/${id}.json`).then(r => { if (still() && r.meta) { meta = r.meta; paint(); } }).catch(() => {});
+    showPick(); sync();
 
-  Promise.all(addons.filter(a => supports(a, 'subtitles', id)).map(a => jget(`${a.url}/subtitles/movie/${id}.json`).then(r => r.subtitles || []).catch(() => [])))
-    .then(lists => {
+    Promise.all(addons.filter(a => supports(a, 'subtitles', vid, type)).map(a => jget(`${a.url}/subtitles/${type}/${vid}.json`).then(r => r.subtitles || []).catch(() => [])))
+      .then(lists => {
+        if (!still()) return;
+        const rank = l => l === 'fre' ? 0 : l === 'eng' ? 1 : 2;
+        const subs = lists.flat().filter(s => s.url).sort((a, b) => rank(a.lang) - rank(b.lang) || String(a.lang).localeCompare(b.lang));
+        allSubs = subs;
+        // per language: "automatic" (the file closest to the release, checked by the server), then each file
+        $('#fsubs').append(...[...new Set(subs.map(s => s.lang))].map(lang => {
+          const name = LANGS[lang] || lang, auto = el('option', { value: 'auto:' + lang, textContent: `${name} — automatic` });
+          auto.dataset.id = 'auto:' + lang;
+          return el('optgroup', { label: name }, auto, ...subs.filter(s => s.lang === lang).map(s => {
+            const o = el('option', { value: s.url, textContent: `${name} · ${s.movieReleaseName || s.subtitleFileName || s.id}` }); o.dataset.id = s.id; return o; }));
+        }));
+        // preselection: subtitles from the URL, otherwise those from the last viewing, otherwise the last language chosen as automatic
+        let remembered = ''; try { remembered = localStorage.subs || ''; } catch {}
+        const want = [...$('#fsubs').options].find(o => subId && o.dataset.id === String(subId))
+          || [...$('#fsubs').options].find(o => !subId && chosen && chosen.subs && o.value === chosen.subs)
+          || [...$('#fsubs').options].find(o => !subId && !saved && remembered && o.value === remembered);
+        if (want) { $('#fsubs').value = want.value; subId = want.dataset.id; $('#fsubnote').hidden = false; }
+        subsLoaded = true; sync();
+        if ($('#fsort').value === 'subs' && items.length) render();
+      });
+
+    const sources = addons.filter(a => supports(a, 'stream', vid, type));
+    if (!sources.length) { $('#fstreams').replaceChildren('No source add-on installed. Add one in Settings, under "Add-ons".'); return; }
+    let found = 0, pending = sources.length;
+    sources.forEach(a => jget(`${a.url}/stream/${type}/${vid}.json`).then(r => r.streams || []).catch(() => []).then(streams => {
       if (!still()) return;
-      const rank = l => l === 'fre' ? 0 : l === 'eng' ? 1 : 2;
-      const subs = lists.flat().filter(s => s.url).sort((a, b) => rank(a.lang) - rank(b.lang) || String(a.lang).localeCompare(b.lang));
-      allSubs = subs;
-      // per language: "automatic" (the file closest to the movie's release, checked by the server), then each file
-      $('#fsubs').append(...[...new Set(subs.map(s => s.lang))].map(lang => {
-        const name = LANGS[lang] || lang, auto = el('option', { value: 'auto:' + lang, textContent: `${name} — automatic` });
-        auto.dataset.id = 'auto:' + lang;
-        return el('optgroup', { label: name }, auto, ...subs.filter(s => s.lang === lang).map(s => {
-          const o = el('option', { value: s.url, textContent: `${name} · ${s.movieReleaseName || s.subtitleFileName || s.id}` }); o.dataset.id = s.id; return o; }));
+      found += streams.length; pending--;
+      items.push(...streams.map(s => {
+        const ok = s.infoHash || /^https?:/.test(s.url || '');
+        const src = { infoHash: s.infoHash, fileIdx: s.fileIdx, filename: s.behaviorHints && s.behaviorHints.filename, url: s.url, sources: s.sources };
+        const same = chosen && (s.infoHash ? s.infoHash.toLowerCase() === String(chosen.infoHash || '').toLowerCase() && (chosen.fileIdx === undefined || chosen.fileIdx === s.fileIdx) : s.url && s.url === chosen.url);
+        const text = `${s.name || ''}\n${s.title || s.description || ''}`, label = `${(s.name || '').replace(/\s+/g, ' ')} · ${(s.title || s.description || '').split('\n')[0]}`;
+        const b = el('button', { className: 'stream' + (same ? ' sel' : ''), disabled: !ok, title: ok ? 'Select this source' : 'Unsupported source type' },
+          el('b', { textContent: `${a.manifest.name} — ${s.name || ''}${same && saved ? '  ·  last used source' : ''}` }), el('span', { textContent: s.title || s.description || '' }));
+        if (same) { picked = label; showPick(); }
+        b.onclick = () => {
+          chosen = { ...src }; picked = label;
+          items.forEach(it => it.button.classList.toggle('sel', it.button === b));
+          showPick(); sync();
+        };
+        return { button: b, src, text, ...sourceFacts(text) };
       }));
-      // preselection: subtitles from the URL, otherwise those from the last viewing, otherwise the last language chosen as automatic
-      let remembered = ''; try { remembered = localStorage.subs || ''; } catch {}
-      const want = [...$('#fsubs').options].find(o => subId && o.dataset.id === String(subId))
-        || [...$('#fsubs').options].find(o => !subId && chosen && chosen.subs && o.value === chosen.subs)
-        || [...$('#fsubs').options].find(o => !subId && !saved && remembered && o.value === remembered);
-      if (want) { $('#fsubs').value = want.value; subId = want.dataset.id; $('#fsubnote').hidden = false; }
-      subsLoaded = true; sync();
-      if ($('#fsort').value === 'subs' && items.length) render();
-    });
-
-  const sources = addons.filter(a => supports(a, 'stream', id));
-  if (!sources.length) { $('#fstreams').replaceChildren('No source add-on installed. Add one in Settings, under "Add-ons".'); return; }
-  let found = 0, pending = sources.length;
-  sources.forEach(a => jget(`${a.url}/stream/movie/${id}.json`).then(r => r.streams || []).catch(() => []).then(streams => {
-    if (!still()) return;
-    found += streams.length; pending--;
-    items.push(...streams.map(s => {
-      const ok = s.infoHash || /^https?:/.test(s.url || '');
-      const src = { infoHash: s.infoHash, fileIdx: s.fileIdx, filename: s.behaviorHints && s.behaviorHints.filename, url: s.url, sources: s.sources };
-      const same = chosen && (s.infoHash ? s.infoHash.toLowerCase() === String(chosen.infoHash || '').toLowerCase() && (chosen.fileIdx === undefined || chosen.fileIdx === s.fileIdx) : s.url && s.url === chosen.url);
-      const text = `${s.name || ''}\n${s.title || s.description || ''}`, label = `${(s.name || '').replace(/\s+/g, ' ')} · ${(s.title || s.description || '').split('\n')[0]}`;
-      const b = el('button', { className: 'stream' + (same ? ' sel' : ''), disabled: !ok, title: ok ? 'Select this source' : 'Unsupported source type' },
-        el('b', { textContent: `${a.manifest.name} — ${s.name || ''}${same && saved ? '  ·  last used source' : ''}` }), el('span', { textContent: s.title || s.description || '' }));
-      if (same) { picked = label; showPick(); }
-      b.onclick = () => {
-        chosen = { ...src }; picked = label;
-        items.forEach(it => it.button.classList.toggle('sel', it.button === b));
-        showPick(); sync();
-      };
-      return { button: b, src, text, ...sourceFacts(text) };
+      if (found) render();
+      if (!pending && !found) $('#fstreams').replaceChildren(ep ? 'No source found for this episode.' : 'No source found for this movie.');
     }));
-    if (found) render();
-    if (!pending && !found) $('#fstreams').replaceChildren('No source found for this movie.');
+  }
+
+  if (type === 'movie') { showVideo(id, fromUrl); return; }
+
+  // ---- Series: seasons and episodes come with the description; an episode is then handled like a movie ----
+  await fetched;
+  if (curFilm !== id) return;
+  const eps = (meta.videos || []).map(v => ({ s: +v.season, e: +(v.episode ?? v.number), id: v.id, name: v.name || v.title || '', date: String(v.released || '').slice(0, 10), text: v.overview || v.description || '' }))
+    .filter(v => v.id && Number.isFinite(v.s) && Number.isFinite(v.e))
+    .sort((a, b) => (a.s || 1e6) - (b.s || 1e6) || a.e - b.e);  // season 0 (specials) last
+  $('#fepbox').hidden = false;
+  if (!eps.length) { $('#fseason').replaceChildren(); $('#feps').replaceChildren('No episode list for this series.'); blank(''); return; }
+  const key = v => `${v.s}:${v.e}`;
+  // Episode shown on arrival: the one from the URL, else the one being watched, else the one after the last finished, else the first
+  const last = watched[0] && eps.find(v => v.id === watched[0].id);
+  const start = eps.find(v => key(v) === fromUrl.ep) || (last && (finished(watched[0]) ? eps[eps.indexOf(last) + 1] || last : last)) || eps[0];
+  let current = null;
+  const today = new Date().toISOString().slice(0, 10);
+  const done = v => !!seen[v.id] && finished(seen[v.id]);
+  const listSeason = s => $('#feps').replaceChildren(...eps.filter(v => v.s === s).map(v => {
+    const p = seen[v.id], going = p && !done(v);
+    const state = done(v) ? 'Watched' : going ? `Stopped at ${hms(p.position)}${p.duration ? ' of ' + hms(p.duration) : ''}` : v.date > today ? `Airs ${v.date}` : v.date;
+    return el('button', { className: 'stream' + (v === current ? ' sel' : '') + (done(v) ? ' done' : ''), title: v.text, onclick: () => pickEp(v) },
+      ...(done(v) ? [icon('check')] : []),
+      el('b', { textContent: `${v.e}. ${v.name || 'Episode ' + v.e}` }), el('span', { textContent: state }),
+      ...(going && p.duration ? [el('div', { className: 'prog' }, el('i', { style: `width:${p.position / p.duration * 100}%` }))] : []));
   }));
+  function pickEp(v, urlChoices = {}) {
+    current = v;
+    $('#fseason').value = v.s;
+    listSeason(v.s);
+    showVideo(v.id, urlChoices, v);
+  }
+  $('#fseason').replaceChildren(...[...new Set(eps.map(v => v.s))].map(s => {
+    const all = eps.filter(v => v.s === s), n = all.filter(done).length;
+    return el('option', { value: s, textContent: (s ? `Season ${s}` : 'Specials') + (n ? ` · ${n}/${all.length} watched` : '') });
+  }));
+  const total = eps.filter(done).length;
+  $('#fepcount').textContent = total ? `· ${total} of ${eps.length} watched` : '';
+  $('#fseason').onchange = e => listSeason(+e.target.value);
+  pickEp(start, key(start) === fromUrl.ep ? fromUrl : {});
 }
-$('#fback').addEventListener('click', () => go(location.pathname + '#movies'));
 
 // ---- YouTube tab: search, and the links played lately ----
 const playLink = url => { $('#link').value = url; act('castlink', { url, mode: 'stream' }); };
@@ -1111,11 +1216,14 @@ const span = s => { const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60
 async function loadHome() {
   const [st, hist] = await Promise.all([api('stats').catch(() => null), api('history').catch(() => ({ links: [] })), loadProgress()]);
   if (st) {
-    const done = Object.values(seen).filter(finished).length, going = Object.values(seen).length - done;
+    const movies = Object.values(seen).filter(p => !p.series), done = movies.filter(finished).length, going = movies.length - done;
     $('#gtotal').textContent = span(st.seconds);
     $('#gweek').textContent = span(st.week);
     $('#gfilms').textContent = done;
     $('#gfilmsl').textContent = `movie${done === 1 ? '' : 's'} finished` + (going ? `, ${going} in progress` : '');
+    const epis = Object.values(seen).filter(p => p.series), seen1 = epis.filter(finished).length, shows = new Set(epis.map(p => p.series)).size;
+    $('#gepis').textContent = seen1;
+    $('#gepisl').textContent = `episode${seen1 === 1 ? '' : 's'} watched` + (shows ? `, ${shows} series` : '');
     $('#gvids').textContent = st.plays.links || 0;
   }
   $('#homehist').hidden = !hist.links.length;
@@ -1125,18 +1233,19 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-go]');
   if (b) go(location.pathname + '#' + b.dataset.go);
 });
-$('#tremote').addEventListener('click', () => $('#remotedlg').showModal());
 
 // ---- Views: the address says which one is shown (?film=… for a movie page, otherwise #movies, #youtube, #files, #settings, #player) ----
-const VIEWS = ['home', 'movies', 'youtube', 'files', 'settings', 'player'];
+const VIEWS = ['home', 'movies', 'series', 'youtube', 'files', 'settings', 'player'];
 function route() {
   const q = new URLSearchParams(location.search), film = q.get('film'), h = location.hash.slice(1);
   const view = film ? 'film' : VIEWS.includes(h) ? h : 'home', changed = document.body.dataset.view !== view;
-  document.querySelectorAll('.view').forEach(v => { v.hidden = v.id !== 'v-' + view; });
-  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.view === (view === 'film' ? 'movies' : view)));
+  const series = q.get('type') === 'series';
+  document.querySelectorAll('.view').forEach(v => { v.hidden = v.id !== 'v-' + (view === 'series' ? 'movies' : view); });  // series: the catalog view, other kind
+  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.view === (view === 'film' ? (series ? 'series' : 'movies') : view)));
   document.body.dataset.view = view;
+  if (view === 'movies' || view === 'series') setType(view === 'series' ? 'series' : 'movie');
   if (view !== 'film') curFilm = null;
-  else if (film !== curFilm) showFilm(film, { source: q.get('source'), file: q.get('file') ?? undefined, subs: q.get('subs') });
+  else if (film !== curFilm) showFilm(film, { type: q.get('type'), ep: q.get('ep'), source: q.get('source'), file: q.get('file') ?? undefined, subs: q.get('subs') });
   if (view === 'home') loadHome();
   if (view === 'youtube') loadHistory();
   if (changed || view === 'film') scrollTo(0, 0);
