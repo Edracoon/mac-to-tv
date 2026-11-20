@@ -889,7 +889,7 @@ def verify_subs(live, url, track, duration, paths, memo):
 
 def synced_subs(live, url, subs, alts=(), track=None):
     """Picks the .srt for the `live` stream: result of a past check, else the preferred one + a background check."""
-    memo = CACHE / "subs" / ("sync-" + hashlib.sha1((url + "|" + subs).encode()).hexdigest() + ".json")
+    memo = CACHE / "subs" / ("sync2-" + hashlib.sha1((url + "|" + subs).encode()).hexdigest() + ".json")
     if memo.exists() and Path((m := json.loads(memo.read_text()))["srt"]).exists():
         live["subs"], live["note"] = Path(m["srt"]), m["note"]
         return

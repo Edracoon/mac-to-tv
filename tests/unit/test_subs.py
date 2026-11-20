@@ -1,6 +1,6 @@
 import unittest
 
-from subs import dense_stretches, fit_subs, parse_srt, sound_shift, vtt, write_srt
+from subs import dense_stretches, fit_by_sound, fit_subs, parse_srt, ref_places, sound_shift, vtt, write_srt
 
 
 class Formats(unittest.TestCase):
@@ -36,6 +36,14 @@ class SyncAgainstAReferenceTrack(unittest.TestCase):
     def test_a_file_in_sync_is_left_alone(self):
         self.assertEqual(fit_subs([self.truth], self.windows)[2:], ("checked: in sync", False))
 
+    def test_no_answer_when_no_file_fits(self):
+        self.assertIsNone(fit_subs([[(t * 1.3 + 500, e, x) for t, e, x in self.truth]], self.windows))
+
+    def test_the_reference_is_read_where_the_file_has_most_cues(self):
+        talk = [t for a in (1200, 5040) for t in (a + 3 * n for n in range(40))] + [300.0, 2500.0, 6500.0]  # two talkative scenes
+        self.assertEqual(ref_places(sorted(talk), 7200), [1200, 5040])
+        self.assertEqual(ref_places([10.0, 20.0], 7200), [720, 5040])  # nothing dense: 10 % and 70 % of the movie
+
 
 class SyncAgainstTheSound(unittest.TestCase):
     """Cues 12.3 s early against a "sound" that gets loud for 1.5 s when each line is spoken must come out as +12.3,
@@ -53,11 +61,40 @@ class SyncAgainstTheSound(unittest.TestCase):
             return z
         self.excerpts = [(900 * w, heard(lines, 900 * w)) for w, lines in enumerate(self.said)]
 
+    def cues(self, time=lambda t: t, stretches=(0, 1, 2)):
+        return [(time(t0), time(t0) + 2, "x") for w in stretches for t0 in self.said[w]]
+
     def test_the_shift_is_found(self):
-        self.assertEqual(sound_shift([t0 - 12.3 for lines in self.said for t0 in lines], self.excerpts), (12.3, True))
+        self.assertEqual(sound_shift([t0 - 12.3 for lines in self.said for t0 in lines], self.excerpts)[:2], (12.3, True))
 
     def test_unrelated_cues_give_no_clear_answer(self):
         self.assertFalse(sound_shift([11.7 * n for n in range(240)], self.excerpts)[1])
+        self.assertIsNone(fit_by_sound([[(11.7 * n, 11.7 * n + 2, "x") for n in range(240)]], self.excerpts))
+
+    def test_a_file_in_sync_is_left_alone(self):
+        self.assertEqual(fit_by_sound([self.cues()], self.excerpts)[2:], ("checked against the sound: in sync", False))
+
+    def test_a_file_timed_for_another_frame_rate_gets_its_speed_back(self):
+        r = 25 / 23.976
+        i, fixed, note, changed = fit_by_sound([self.cues(lambda t: (t - 7.5) / r)], self.excerpts)
+        self.assertTrue(changed)
+        self.assertIn("speed corrected", note)
+        self.assertLess(max(abs(f[0] - t[0]) for f, t in zip(fixed, self.cues())), 0.3)
+
+    def test_a_file_that_stops_early_is_judged_on_the_stretches_it_covers(self):
+        b, clear, _ = sound_shift([a - 4 for a, _, _ in self.cues(stretches=(0, 1))], self.excerpts)
+        self.assertEqual((b, clear), (4.0, True))
+
+    def test_the_preferred_file_is_kept_when_it_fits(self):
+        late = self.cues(lambda t: t - 20)
+        i, fixed, note, changed = fit_by_sound([late, self.cues()], self.excerpts)
+        self.assertEqual((i, changed), (0, True))
+        self.assertIn("shifted by +20.0 s", note)
+
+    def test_another_file_is_taken_when_the_preferred_one_does_not_fit(self):
+        i, _, note, changed = fit_by_sound([[(11.7 * n, 11.7 * n + 2, "x") for n in range(240)], self.cues()], self.excerpts)
+        self.assertEqual((i, changed), (1, True))
+        self.assertIn("switched to a file", note)
 
     def test_the_stretches_with_most_cues_are_picked(self):
         self.assertEqual(dense_stretches(sorted(t0 for lines in self.said for t0 in lines), 3000), [0, 900, 1800])

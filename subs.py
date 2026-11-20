@@ -85,11 +85,17 @@ def ref_window(url, track, start, length=120, patience=90, alive=lambda: True):
     return sorted(a for a, _, _ in parse_srt(text) if start <= a < start + length)
 
 
-# --- Without a reference track: match the subtitles to the sound of the movie ---
+# --- Against the sound of the movie: when the reference track is missing, nearly empty, or gives no clear answer ---
 # People start talking when a subtitle appears: the speech band gets louder right at the start of a cue. We read
-# the sound of the three stretches where the file has most cues and look for the shift at which that holds best.
-# Measured on two movies: the right shift stands 7 to 10 deviations above the others in each stretch, the next
-# candidate under 3. We only act when the three stretches agree.
+# the sound of the three stretches where the file has most cues and look for the shift, and the speed, at which that
+# holds best. We only act when the stretches agree.
+# Measured on 15 movies (2026-11-20; 97 subtitle files, their truth taken from six excerpts of the embedded track): a file
+# that fits scores 7 to 14 deviations above the other shifts overall, and 4.3 to 9.8 in each stretch taken alone. Files
+# of the other movies, tried at every speed, never went above 5.1 overall or 3.5 in a stretch (7 movies looked at), and
+# none of 896 passed the rule below. On the movies' own files it answered 71 times: 66 within half a second of the
+# truth, 5 one to two seconds from it, on files the reference itself only half fits (made for another cut, probably).
+# ponytail: where it fails. A movie of people talking over each other in one room (12 Angry Men: 7 files unanswered,
+# all settled by the reference track), and a file made for another cut, which no single shift puts right.
 
 def loudness(url, start, length, alive=lambda: True):
     """Loudness of the speech band from `start`, one value per 100 ms, standardized over the excerpt; [] if unreadable."""
@@ -125,9 +131,10 @@ def dense_stretches(starts, duration, length=480, apart=900, n=3, least=15):
     return sorted(picks[:n])
 
 
-def sound_shift(starts, excerpts, reach=60):
+def sound_shift(starts, excerpts, reach=90):
     """excerpts: [(second it starts at, loudness)]. Returns (shift b such that the cues at starts + b fall where
-    speech begins, clear?) — clear: one shift stands out overall and each excerpt, taken alone, points to it."""
+    speech begins, clear?, score) — clear: one shift stands out overall and each excerpt, taken alone, points to it;
+    score: how far it stands out, to compare two clear answers."""
     def peak(scores):
         mean = sum(scores) / len(scores)
         dev = math.sqrt(sum((x - mean) ** 2 for x in scores) / len(scores)) or 1
@@ -150,39 +157,48 @@ def sound_shift(starts, excerpts, reach=60):
             scores.append(tot)
         per.append(scores)
     if not per:
-        return 0.0, False
+        return 0.0, False, 0.0
     k, z, z2 = peak([sum(col) for col in zip(*per)])
-    alone = [peak(s) for s in per]
-    clear = len(per) >= 2 and z >= 6 and z2 <= 0.6 * z and all(abs(k1 - k) <= 7 and z1 >= 5 for k1, z1, _ in alone)
-    return (k - reach * 10) / 10, clear
+    heard = [p for p in map(peak, per) if p[1] > 0]  # an excerpt where the file has no cue says nothing (a file that stops early)
+    # 1.2 s between excerpts: some files wander by a second along the movie, and one shift still puts them right
+    clear = (len(heard) >= 2 and z >= 6 and z2 <= 0.6 * z
+             and all(abs(k1 - k) <= 12 and z1 >= (4.5 if len(heard) >= 3 else 6) for k1, z1, _ in heard))
+    return (k - reach * 10) / 10, clear, z
 
 
-def fit_by_sound(url, duration, candidates, alive=lambda: True):
-    """Same contract as fit_subs, for a video file without a reference track.
-    ponytail: shift only. A file timed for another frame rate drifts, so its stretches disagree and nothing is
-    changed; fit a speed across the stretches if such files turn out to be common."""
-    starts = [a for a, _, _ in candidates[0]]
+def sound_excerpts(url, duration, starts, alive=lambda: True):
+    """Reads the sound of the stretches where a file with cues at `starts` has most of them → [(start, loudness)];
+    None when `alive()` said meanwhile that it is no longer wanted. About 30 minutes of the movie have to be read."""
     excerpts = []
     for t in dense_stretches(starts, duration):
-        z = loudness(url, max(t - 60, 0), 600, alive)
+        start = max(t - 60, 0)
+        z = loudness(url, start, 600, alive)
         if not alive():
-            return 0, candidates[0], "", False
-        if z:
-            excerpts.append((max(t - 60, 0), z))
-    if len(excerpts) < 2:
-        return 0, candidates[0], 'not checked: the sound could not be read. Adjust with the buttons if needed', False
+            return None
+        # A read that hiccups (a torrent piece late or broken) gives sound with a hole in it: what follows the hole
+        # comes too early, and that stretch would contradict the others. Seen live: 5968 values instead of 6000.
+        if len(z) >= min(600, duration - start) * 10 - 3:
+            excerpts.append((start, z))
+    return excerpts
+
+
+def fit_by_sound(candidates, excerpts):
+    """Same contract as fit_subs, against the sound read by sound_excerpts()."""
     found = []
     for i, cues in enumerate(candidates):
-        b, clear = sound_shift([a for a, _, _ in cues], excerpts)
-        if clear:
-            found.append((-abs(b), -i, i, b))  # between files that fit, the one that needs the smallest shift
+        fits = [(z, r, b) for r in SPEEDS for b, clear, z in [sound_shift([a * r for a, _, _ in cues], excerpts)] if clear]
+        if fits:  # at a neighbouring speed the stretches can still agree, but less sharply: the best score is the right speed
+            found.append((i, *max(fits)))
+            if i == 0:
+                break  # the preferred file fits: no need for another
     if not found:
-        return 0, candidates[0], 'not checked: the sound gives no clear answer. Adjust with the buttons if needed', False
-    _, _, i, b = max(found)
-    if abs(b) < 0.3:
+        return None
+    i, _, r, b = max(found, key=lambda f: f[1])
+    if r == 1 and abs(b) <= 0.5:  # speech starts a moment after its line appears: half a second is not a file to correct
         note, cues = "checked against the sound: in sync", candidates[i]
     else:
-        note, cues = f"shifted by {b:+.1f} s to match the sound", [(a + b, e + b, x) for a, e, x in candidates[i]]
+        note = f"shifted by {b:+.1f} s to match the sound" + (" (speed corrected)" if r != 1 else "")
+        cues = [(a * r + b, e * r + b, x) for a, e, x in candidates[i]]
     return i, cues, note + (" — switched to a file that matches this release better" if i else ""), bool(i) or cues is not candidates[i]
 
 
@@ -191,7 +207,8 @@ SPEEDS = (1, 24 / 23.976, 23.976 / 24, 25 / 23.976, 23.976 / 25, 25 / 24, 24 / 2
 
 def match_subs(starts, windows, reach=120, tol=0.3):
     """Best (speed r, shift b) such that starts × r + b lands on the cues of both excerpts.
-    Returns (r, b, clear?) — clear: the best score dominates the 2nd distinct peak and the typical score, in each excerpt."""
+    Returns (r, b, clear?, score) — clear: the best score dominates the 2nd distinct peak and the typical score, and
+    enough of each excerpt is covered."""
     scores = []
     for r in SPEEDS:
         near = [[t * r for t in starts if w[0] - 1 - reach <= t * r <= w[-1] + 1 + reach] for w in windows]
@@ -210,19 +227,39 @@ def match_subs(starts, windows, reach=120, tol=0.3):
     best = scores[0]
     second = next((sc for sc in scores if sc[3] != best[3] or abs(sc[4] - best[4]) > 1.5), best)
     typical = scores[len(scores) // 2][0]
-    clear = best[1] >= 8 and best[0] >= 1.2 * second[0] and best[0] >= 2 * max(typical, 1)
-    return best[3], best[4], clear, best[0]
+    r, b = best[3], best[4]
+    moved = sorted(t * r + b for t in starts)
+
+    def covered(w):  # share of the reference cues that a cue of the file lands on
+        at = [bisect.bisect_left(moved, u) for u in w]
+        return sum(any(abs(u - moved[j]) < tol for j in (i - 1, i) if 0 <= j < len(moved)) for u, i in zip(w, at)) / len(w)
+    # Measured on 15 movies (2026-11-20): with the three conditions on the scores alone, 5 files of another movie out of
+    # 896 came out as "clear", all at a 4 % speed change, where many cues fall on a reference cue by chance; they covered
+    # 28 to 35 % of the worse excerpt. Right answers covered 41 % and more (one exception at 30 %), 58 % and more at 4 %.
+    enough = 0.5 if abs(r - 1) > 0.01 else 0.4
+    clear = (best[1] >= 8 and best[0] >= 1.2 * second[0] and best[0] >= 2 * max(typical, 1)
+             and min(covered(w) for w in windows if w) >= enough)
+    return r, b, clear, best[0]
+
+
+def ref_places(starts, duration):
+    """Where to read the two excerpts of the reference track: the two 2-minute stretches where the file has most cues,
+    at least 30 % of the movie apart. At fixed places (10 % and 70 %, as before) one of them often fell in a scene
+    without a word: on the 7 movies measured, the check then concluded for 11 files out of 42, against 19 this way."""
+    picks = dense_stretches(starts, duration, length=120, apart=int(duration * 0.3), n=2, least=10)
+    return picks if len(picks) == 2 else [int(duration * f) for f in (0.10, 0.70)]
 
 
 def fit_subs(candidates, windows):
-    """candidates: lists of cues, the preferred one first. Returns (chosen index, cues, note, changed?)."""
+    """candidates: lists of cues, the preferred one first. Returns (chosen index, cues, note, changed?), or None when
+    no file clearly fits the reference."""
     found = []
     for i, cues in enumerate(candidates):
         r, b, clear, score = match_subs([a for a, _, _ in cues], windows)
         if clear:
             found.append((score, -i, i, r, b))
     if not found:
-        return 0, candidates[0], 'not checked: adjust with the buttons if needed', False
+        return None
     _, _, i, r, b = max(found)
     if r == 1 and abs(b) < 0.3:
         note, cues = "checked: in sync", candidates[i]
@@ -254,19 +291,32 @@ def vtt(text, shift=0):
 
 def check(url, track, duration, paths, memo, alive=lambda: True):
     """Checks the candidate .srt files `paths` (the preferred one first) against the video at `url`; track: index of
-    its embedded text subtitle track, None to go by the sound. Returns (file to show, note for the page, changed?),
+    its embedded text subtitle track, None when it has none. Returns (file to show, note for the page, changed?),
     remembered in `memo` — or None when `alive()` said meanwhile that the result is no longer wanted.
-    This reads other parts of the movie than the one being played."""
+    This reads other parts of the movie than the one being played: a few minutes for the reference track, and half
+    an hour of sound when that gives nothing."""
     candidates = [parse_srt(p.read_text("utf-8", "replace")) for p in paths]
-    windows = [ref_window(url, track, int(duration * f), alive=alive) for f in (0.10, 0.70)] if track is not None else []
-    if not alive():
-        return None
-    if track is not None and min(len(w) for w in windows) < 10:
-        note, changed, srt = "not checked: too few reference cues", False, paths[0]
-    else:
-        i, cues, note, changed = fit_subs(candidates, windows) if track is not None else fit_by_sound(url, duration, candidates, alive)
+    starts = [a for a, _, _ in candidates[0]]
+    found = None
+    if track is not None:
+        windows = [ref_window(url, track, t, alive=alive) for t in ref_places(starts, duration)]
         if not alive():
             return None
+        if min(len(w) for w in windows) >= 10:
+            found = fit_subs(candidates, windows)
+    if found is None:
+        # no embedded track, one with next to nothing in it (forced subtitles), or one worded too differently to be
+        # compared (another language, cut into other lines): the sound of the movie is the other witness
+        excerpts = sound_excerpts(url, duration, starts, alive)
+        if excerpts is None:
+            return None
+        if len(excerpts) < 2:  # the source is too slow, or broken there: say so, and try again at the next playback
+            return paths[0], "not checked: the video could not be read. Adjust with the buttons if needed", False
+        found = fit_by_sound(candidates, excerpts)
+    if found is None:
+        srt, note, changed = paths[0], "not checked: no clear answer from the video. Adjust with the buttons if needed", False
+    else:
+        i, cues, note, changed = found
         srt = paths[i]
         if changed:
             srt = memo.with_suffix(".srt")

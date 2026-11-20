@@ -115,12 +115,25 @@ The page queries Stremio-format add-ons directly (open protocol: `manifest.json`
   release of the movie. Two safeguards:
   1. the page ranks the files of a language by similarity between their release name and the video file name
      (WEB/BluRay/CAM source, resolution, year, group) — the "automatic" option of the detail page;
-  2. during playback, the server checks in the background: if the video file contains a text subtitle track
-     (any language), it reads two 2 min excerpts from it (10% and 70% of the movie) and looks, for each candidate,
-     for an offset and a speed that fit both. If one candidate clearly stands out, it keeps it (file changed
-     and/or timings corrected) and restarts the stream at the same position; otherwise it changes nothing. The result is kept in
-     `cache/subs/sync-*` and the page announces it ("Subtitles checked…").
-  Limits: without a subtitle track in the video file, no checking; the thresholds were tuned on a single movie.
+  2. during playback, the server checks in the background, against two witnesses found in the video itself:
+     - **its own subtitles**: if the video file contains a text subtitle track (any language), the server reads two
+       2 min excerpts of it, where the candidate has most lines, and looks for an offset and a speed that fit both;
+     - **its sound**, when there is no such track, when it is nearly empty (forced subtitles) or when it is worded too
+       differently to compare: people start talking when a subtitle appears, so the server reads the sound of the
+       three most talkative stretches (10 min each) and looks for the offset and the speed at which the lines start
+       where speech starts. All stretches must agree.
+
+     If one candidate clearly stands out, it is kept (file changed and/or timings corrected) and the stream restarts
+     at the same position; otherwise nothing is changed. The result is kept in `cache/subs/sync2-*` and the page
+     announces it ("Subtitles checked…", "Subtitles shifted by…").
+
+  Measured on 15 movies with 97 subtitle files (November 2026): 75 corrected or confirmed within half a second, 5 put
+  one to two seconds from where they should be, 17 left alone, none made worse by a wrong correction. 896 files of
+  other movies, given on purpose, were all left alone.
+  Limits: a file made for another cut of the movie (scenes added or removed) cannot be fixed by one offset: it is left
+  alone, or put right for part of the movie only. The sound check does not conclude on a movie where people talk
+  over each other all along. It reads half an hour of the movie, so over a torrent it only runs when the download is
+  well ahead of playback; when the video could not be read, the check is made again at the next playback.
 - **Manual adjustment**: the player's "earlier" / "later" buttons shift the subtitles in 0.5 s steps
   (`POST /api/subdelay {delta}`); the stream restarts at the same position and the offset is kept for resume.
   The burn-in itself is exact (checked with a clock video, including after a seek): pausing and resuming shift nothing.
