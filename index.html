@@ -526,6 +526,7 @@ body.hasmini #toast{bottom:76px}
       <div id="acredits" class="muted"></div>
       <div class="row" id="alinks">
         <button id="afilm" hidden>Movie page</button>
+        <button id="anext" hidden>Next episode</button>
         <a id="alink" target="_blank" rel="noopener" hidden>Open the original page</a>
       </div>
     </div>
@@ -705,7 +706,12 @@ function paintAbout(s) {
   $('#adesc').textContent = a.description || ''; $('#adesc').hidden = !a.description;
   $('#acredits').textContent = a.credits || '';
   $('#aposter').hidden = !a.poster; $('#aposter').src = a.poster || '';
+  const ep = String(a.film || '').split(':');  // an episode is "<series id>:<season>:<episode>"
   $('#afilm').hidden = !a.film; $('#afilm').onclick = () => openFilm(a.film);
+  $('#afilm').textContent = ep.length < 3 ? 'Movie page' : 'Episode page';
+  // ponytail: opens the next episode's page, where its source is chosen; pick the source too (same pack, same release) to chain episodes without a click
+  $('#anext').hidden = ep.length < 3;
+  $('#anext').onclick = () => go(location.pathname + '?' + new URLSearchParams({ film: ep.slice(0, -2).join(':'), type: 'series', after: ep.slice(-2).join(':') }));
   $('#alink').hidden = !a.link; $('#alink').href = a.link || '';
   $('#alinks').hidden = !a.film && !a.link;
 }
@@ -1383,9 +1389,12 @@ async function showFilm(id, fromUrl = {}) {
   $('#fepbox').hidden = false;
   if (!eps.length) { $('#fseason').replaceChildren(); $('#feps').replaceChildren('No episode list for this series.'); blank(''); return; }
   const key = v => `${v.s}:${v.e}`;
-  // Episode shown on arrival: the one from the URL, else the one being watched, else the one after the last finished, else the first
-  const last = watched[0] && eps.find(v => v.id === watched[0].id);
-  const start = eps.find(v => key(v) === fromUrl.ep) || (last && (finished(watched[0]) ? eps[eps.indexOf(last) + 1] || last : last)) || eps[0];
+  // Episode shown on arrival: the one from the URL (or the one after it: "Next episode" under the player), else the one
+  // being watched, else the one after the last finished, else the first
+  const last = watched[0] && eps.find(v => v.id === watched[0].id), before = eps.find(v => key(v) === fromUrl.after);
+  const next = before && eps[eps.indexOf(before) + 1];
+  if (before && !(next && next.s)) toast('That was the last episode');  // what follows the last one in the list are the specials
+  const start = eps.find(v => key(v) === fromUrl.ep) || (next && next.s && next) || (last && (finished(watched[0]) ? eps[eps.indexOf(last) + 1] || last : last)) || eps[0];
   let current = null;
   const today = new Date().toISOString().slice(0, 10);
   const done = v => !!seen[v.id] && finished(seen[v.id]);
@@ -1465,7 +1474,7 @@ function route() {
   document.body.dataset.view = view;
   if (view === 'movies' || view === 'series') setType(view === 'series' ? 'series' : 'movie');
   if (view !== 'film') curFilm = null;
-  else if (film !== curFilm) showFilm(film, { type: q.get('type'), ep: q.get('ep'), source: q.get('source'), file: q.get('file') ?? undefined, subs: q.get('subs') });
+  else if (film !== curFilm) showFilm(film, { type: q.get('type'), ep: q.get('ep'), after: q.get('after'), source: q.get('source'), file: q.get('file') ?? undefined, subs: q.get('subs') });
   if (view === 'home') loadHome();
   if (view === 'youtube') loadHistory();
   if (changed || view === 'film') scrollTo(0, 0);
