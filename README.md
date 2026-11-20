@@ -124,7 +124,7 @@ The page queries Stremio-format add-ons directly (open protocol: `manifest.json`
 - **Manual adjustment**: the player's "earlier" / "later" buttons shift the subtitles in 0.5 s steps
   (`POST /api/subdelay {delta}`); the stream restarts at the same position and the offset is kept for resume.
   The burn-in itself is exact (checked with a clock video, including after a seek): pausing and resuming shift nothing.
-- Movies only for now (no series).
+- Series: seasons and episodes, with one resume position per episode. The next episode does not start by itself.
 
 ### Resume
 
