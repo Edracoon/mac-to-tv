@@ -356,6 +356,8 @@ class TVPlayer:
     convert) is a live stream: sources.py provides the addresses, ffmpeg muxes picture + sound on the fly. Such a
     stream has no middle: seeking = restarting it from there."""
 
+    START_CHECK = 12  # seconds after a launch before checking that the TV is really playing (see watch_start)
+
     def __init__(self):
         self.tv = None  # tvlib.TV picked in the page (or forced by TV_IP)
         self.shared = {}  # token → what the TV may fetch: the video (a Path, or a dict for a relayed address or a live stream), its .srt
@@ -467,7 +469,7 @@ class TVPlayer:
         """A few seconds after a launch: if the TV is already stopped without having been asked to, say so.
         Typical cause: a video or audio format the TV cannot decode."""
         job, launched = self.job, self.job.id
-        time.sleep(12)
+        time.sleep(self.START_CHECK)
         try:
             if launched == job.id and not job.busy and token in self.shared and not job.stopped and not job.error:
                 state = self.soap("AVTransport", "GetTransportInfo", I0).get("CurrentTransportState")

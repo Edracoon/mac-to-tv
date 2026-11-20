@@ -54,6 +54,9 @@ Rules for these fixes:
   (manufacturer, model, services), not on a constant;
 - note the quirk you found in the README, in the driver section or the compatibility table.
 
+No TV at hand? `tests/e2e/fake_tv.py` is a DLNA player that runs on the Mac; `python3 -m unittest` plays files and
+streams on it. If your TV misbehaves in a way it does not reproduce, add the behaviour to it, with a test.
+
 ## 3. Write a remote driver
 
 Without a brand driver, the remote is limited to volume and mute (`UpnpRemote`, through the DLNA player). A driver

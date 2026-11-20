@@ -276,6 +276,24 @@ area of the page rather than in pop-ups:
 The server publishes this state on `GET /api/job` (`busy`, `title`, `steps`, `error`, `detail`); any open page shows
 it, including one that did not start the launch. `POST /api/dismiss` clears a failure.
 
+## Tests
+
+```sh
+python3 -m unittest                              # everything, about 15 s
+python3 -m unittest discover -s tests/unit -t .  # unit tests only: no network, no ffmpeg
+python3 -m unittest discover -s tests/e2e -t .   # the server driving a fake TV
+```
+
+- `tests/unit/`: the functions that can be checked alone (links, subtitle sync, ffmpeg commands, launches, files kept
+  on disk), one file per module.
+- `tests/e2e/`: the real server, asked through its HTTP API like the page does, driving `fake_tv.py`: a small DLNA
+  player that runs on the Mac, answers the same commands as a TV and really fetches the video. It reproduces what
+  caused bugs on the real one: a TV that keeps reporting the previous video for a few seconds, one that stops right
+  away on a format it cannot decode. These tests need `ffmpeg` and `ffprobe` (the clips are generated); the one on
+  burned-in subtitles also needs `ffmpeg-full` and is skipped without it.
+
+The tests use no real TV and no torrent engine, and write nothing to the files of an installation.
+
 ## Folders
 
 | Folder | Contents | Copy to another Mac? |
