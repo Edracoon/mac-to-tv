@@ -1250,6 +1250,7 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 proc.kill()
                 code = proc.wait()
+                proc.stdout.close()
             errors.seek(0)
             log = errors.read().decode("utf-8", "replace").strip()
             if log:
