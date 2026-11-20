@@ -256,19 +256,6 @@ class TV:
             return "absent"
 
 
-def selftest():
-    xml = ("<root><device><deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>"
-           "<friendlyName>Salon (00:11:E1:5b:3f:32)</friendlyName><manufacturer>Acme</manufacturer><modelName>X1</modelName>"
-           "<serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>"
-           "<controlURL>/aw/AVT/control</controlURL></service></serviceList></device></root>")
-    d = parse_description(xml, "http://10.0.0.5:61726/aw")
-    assert d["name"] == "Salon" and d["services"]["AVTransport"] == ("urn:schemas-upnp-org:service:AVTransport:1", "http://10.0.0.5:61726/aw/AVT/control"), d
-    assert summarize([d])["services"] and summarize([{**d, "services": {}, "type": "urn:x:device:Printer:1"}]) is None
-    only_dial = summarize([{**d, "services": {}, "type": "urn:schemas-upnp-org:device:tvdevice:1", "app_url": "http://10.0.0.5:1/apps/"}])
-    assert only_dial["services"] == {} and only_dial["app_url"]
-
-
 if __name__ == "__main__":
-    selftest()
     for t in discover():
         print(t)

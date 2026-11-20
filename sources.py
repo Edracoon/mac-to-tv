@@ -1,7 +1,7 @@
 """mac-to-tv: where the videos come from. Links to video sites (yt-dlp), torrents (TorrServer), sources returned by
 Stremio add-ons. Nothing here knows about the TV or the page; server.py decides what to do with a source.
 
-    python3 server.py --selftest      # also runs the checks of this file
+Tests: tests/unit/test_sources.py
 """
 import atexit
 import hashlib
@@ -272,17 +272,3 @@ def media_fetch(url):
     if r.returncode or not found:
         raise RuntimeError("yt-dlp failed: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
     return found[0]
-
-
-def selftest():
-    assert not is_torrent("/Users/x/a.torrent") and is_torrent("https://example.org/a.torrent")
-    assert is_torrent("magnet:?xt=urn:btih:abc") and is_torrent("08ada5a7a6183aae1e09d831df6748d566095a10") and not is_torrent("https://youtu.be/x")
-    assert torrserver.source(torrserver.URL + "/stream/a.mkv?link=" + "a" * 40 + "&index=1&play", 9) == {"hash": "a" * 40, "size": 9}
-    assert torrserver.source("https://x/a.mkv", 9) is None
-    assert about({"description": "x" * 5000, "poster": "javascript:1", "link": "https://a/b", "other": 1, "film": "tt1"}) == {"description": "x" * 3000, "link": "https://a/b", "film": "tt1"}
-    assert about(None) == {}
-    assert history_entry("u", {"title": "T", "uploader": "C", "duration": 61.4}) == {"url": "u", "title": "T", "channel": "C", "duration": 61, "thumbnail": ""}
-    assert norm_link(" https://youtu.be/dQw4w9WgXcQ ")[0] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    for u in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42", "https://youtu.be/dQw4w9WgXcQ?si=x",
-              "https://youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"):
-        assert youtube_id(u) == "dQw4w9WgXcQ", u

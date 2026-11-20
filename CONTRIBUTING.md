@@ -130,7 +130,7 @@ to store this token: propose your solution in the pull request (a file ignored b
 
 ```sh
 python3 tv.py                 # your TV must show your label and your keys
-python3 server.py --selftest  # must not regress
+python3 -m unittest           # must not regress
 ```
 
 ```python

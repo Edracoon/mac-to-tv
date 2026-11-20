@@ -4,7 +4,7 @@
     python3 server.py [movies_folder] [--lan]         # default folder: ~/Movies
     → http://127.0.0.1:8765
 
-    python3 server.py --selftest                      # checks the pure functions (no network access)
+    python3 -m unittest                               # the tests (see tests/__init__.py)
 
 The TV is picked in the page (local network search); it is remembered in config.json.
 Environment variables: PORT (default 8765), TV_IP (forces a TV without going through the page).
@@ -1269,93 +1269,7 @@ def stream_error(log):
     return "The video source stopped responding.", detail
 
 
-def selftest():
-    job, wjob = tv_player.job, browser.job
-    for outside in ("/etc/hosts", "~/.ssh/id_rsa", str(MEDIA_DIR / ".." / "x.mkv"), str(HERE / "lan-key.txt"), str(HERE / "server.py")):
-        try:
-            allowed_file(outside, MIME)
-            raise AssertionError("file outside the movies folder accepted: " + outside)
-        except ValueError:
-            pass
-    assert needs_convert("av1", "dts") == ["video", "audio"] and needs_convert("hevc", "dts") == ["audio"] and needs_convert("h264", "aac") == []
-    assert needs_convert("", "") == []  # unknown format: leave it alone
-    assert "-request_size 10M" in " ".join(live_cmd({"offset": 0, "inputs": [("https://x/v", "")]}))
-    assert "-request_size" not in live_cmd({"offset": 0, "inputs": [(torrserver.URL + "/stream/x", "")]})
-    assert "-c:v copy -c:a aac" in " ".join(live_cmd({"offset": 0, "inputs": [("/a.mkv", "")], "convert": ["audio"]}))
-    assert stream_error("") == ("The video source stopped responding.", "")
-    assert stream_error("[in#0/hls @ 0x1] Error during demuxing: Input/output error")[1] == "Error during demuxing: Input/output error"
-    assert "refused" in stream_error("x\n[https @ 0x2] Server returned 403 Forbidden (access denied)")[0]
-    assert plain_error(ValueError("unrecognized link")) == ("Unrecognized link.", "")
-    assert plain_error(RuntimeError("yt-dlp failed: ERROR: gone"))[1] == "ERROR: gone"
-    # browser player: what is copied, what is re-encoded, where subtitles land after a seek
-    assert browser_convert("hevc", "ac3") == ["video", "audio"] and browser_convert("h264", "mp3") == [] and browser_convert("h264", "") == []
-    cmd = " ".join(watch_cmd({"inputs": [("/a.mkv", "")], "convert": ["audio"], "vcodec": "h264"}, 90))
-    assert "-ss 90.2 -i /a.mkv -map 0:v:0? -map 0:a:0? -c:v copy -c:a aac" in cmd and cmd.endswith("-f mp4 pipe:1"), cmd
-    assert "-ss 90 -i" in " ".join(watch_cmd({"inputs": [("/a.mkv", "")], "convert": ["video"], "vcodec": "hevc"}, 90))
-    assert watch_at({"convert": ["video"], "vcodec": "hevc"}, 61.5) == 61.5 and watch_at({"convert": [], "vcodec": ""}, 5) == 5
-    # a launch for the browser reports to its own stages, not to the TV's
-    globals()["only_torrent"] = lambda keep=None: None  # the test must not drop the torrents of a server that is running
-    wjob.run("here", lambda: step("for the browser"))
-    assert wjob.steps == [["for the browser", ""]] and wjob.title == "here" and not job.steps and not job.title, (wjob.public(), job.public())
-    step("a"); step("b", "1"); step("b", "2")
-    assert job.steps == [["a", ""], ["b", "2"]]
-    job.steps.clear()
-    # check: a launch replaced by a newer one stops at its next stage and leaves the newer one's stages alone
-    globals()["only_torrent"] = lambda keep=None: None  # the test must not drop the torrents of a server that is running
-    go, out = threading.Event(), []
-    def old_launch():
-        step("old"); go.wait(5); step("old, later")
-    def run_old():
-        try:
-            job.run("old", old_launch)
-        except Superseded:
-            out.append("stopped")
-    th = threading.Thread(target=run_old); th.start()
-    while job.steps != [["old", ""]]:
-        time.sleep(0.01)
-    job.run("new", lambda: (step("new"), go.set(), th.join()))
-    assert out == ["stopped"] and job.steps == [["new", ""]] and job.title == "new" and not job.busy and not job.error, (out, job.public())
-    job.steps.clear()
-    day = lambda n: time.strftime("%Y-%m-%d", time.localtime(1e9 - 86400 * n))
-    assert stats_summary({"seconds": {"movies": 50, "links": 20}, "days": {day(0): 30, day(6): 20, day(7): 20}, "plays": {"links": 3}}, 1e9) \
-        == {"seconds": 70, "by": {"movies": 50, "links": 20}, "plays": {"links": 3}, "week": 50}
-    # check: while the TV has not switched to a restarted stream, the position is the restart point, not the TV's counter
-    lv = {"offset": 1200}
-    tv_player.shared.clear(); tv_player.shared["tok"] = lv
-    assert tv_player.live_position(lv) == 1200
-    assert tv_player.live_position(lv, {"TrackURI": "http://mac/media/old/stream.ts", "RelTime": "0:00:03"}) == 1200
-    assert tv_player.live_position(lv, {"TrackURI": "http://mac/media/tok/stream.ts", "RelTime": "0:00:30"}) == 1230 and tv_player.live_position(lv) == 1230
-    tv_player.shared.clear()
-    # check: the position of a catalog movie is recorded, an unknown duration keeps the one known, another movie is ignored
-    with tempfile.TemporaryDirectory() as d:
-        pr = Progress(Path(d) / "p.json")
-        assert pr.launched({"title": "T", "film": {"id": "tt1"}, "start": 30}) == ("T", "tt1", 30)
-        pr.update("tt1", position=95.7, duration=5400); pr.update("tt1", position=96, sub_delay=1.5); pr.update("nope", position=1)
-        f = pr.films["tt1"]
-        assert (f["position"], f["duration"], f["play"]) == (96, 5400, {"title": "T", "subDelay": 1.5}) and list(pr.films) == ["tt1"], f
-        assert json.loads((Path(d) / "p.json").read_text()) == pr.films
-    tvlib.selftest()
-    sources.selftest()
-    subslib.selftest()
-    assert secs("0:02:05") == 125 and secs("NOT_IMPLEMENTED") == 0 and hms(3725) == "1:02:05"
-    assert "setpts=PTS+(367.5)/TB" in " ".join(live_cmd({"offset": 369, "sub_delay": 1.5, "inputs": [("/a.mkv", "")], "subs": "/s.srt"}))
-    assert parse_range(None, 100) is None
-    assert parse_range("bytes=0-", 100) == (0, 99)
-    assert parse_range("bytes=10-19", 100) == (10, 19)
-    assert parse_range("bytes=90-500", 100) == (90, 99)
-    assert parse_range("bytes=-10", 100) == (90, 99)
-    try:
-        parse_range("bytes=100-", 100)
-        raise AssertionError("out-of-bounds Range accepted")
-    except ValueError:
-        pass
-    print("selftest ok")
-
-
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
-        selftest()
-        sys.exit()
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # so that TorrServer stops with us
     tidy()
     if os.path.exists("/usr/bin/caffeinate"):  # macOS: stay awake while plugged in, for as long as this server runs

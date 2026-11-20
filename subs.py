@@ -2,7 +2,7 @@
 the movie (against a subtitle track embedded in the video, else against its sound). Nothing here knows about the TV
 or the page; server.py decides what to do with the result.
 
-    python3 server.py --selftest      # also runs the checks of this file
+Tests: tests/unit/test_subs.py
 """
 import bisect
 import hashlib
@@ -273,32 +273,3 @@ def check(url, track, duration, paths, memo, alive=lambda: True):
             srt.write_text(write_srt(cues), "utf-8")
     memo.write_text(json.dumps({"srt": str(srt), "note": note}))
     return srt, note, changed
-
-
-def selftest():
-    assert vtt("1\n00:00:01,000 --> 00:00:02,500\n{\\an8}<i>Hi</i>\n\n2\n00:01:00,000 --> 00:01:02,000\nLater\n", -50) \
-        == "WEBVTT\n\n00:00:10.000 --> 00:00:12.000\nLater\n"
-    assert vtt("1\n00:00:01,000 --> 00:00:02,500\n{\\an8}<i>Hi</i>\n").endswith("00:00:01.000 --> 00:00:02.500\n<i>Hi</i>\n")
-    # check: cues 12.3 s early against a "sound" that gets loud for 1.5 s when each line is spoken must come out as +12.3,
-    # and unrelated cues must not come out as clear
-    said = [[40 + 7.3 * n + (n * n * 37 % 50) / 10 + 900 * w for n in range(60)] for w in range(3)]
-    def heard(lines, start, length=600):
-        z = [-0.4 + ((i * 7919) % 13) / 40 for i in range(length * 10)]
-        for t0 in lines:
-            for i in range(int((t0 - start) * 10), int((t0 - start + 1.5) * 10)):
-                if 0 <= i < len(z):
-                    z[i] = 1.6
-        return z
-    excerpts = [(900 * w, heard(lines, 900 * w)) for w, lines in enumerate(said)]
-    assert sound_shift([t0 - 12.3 for lines in said for t0 in lines], excerpts) == (12.3, True)
-    assert not sound_shift([11.7 * n for n in range(240)], excerpts)[1]
-    assert dense_stretches(sorted(t0 for lines in said for t0 in lines), 3000) == [0, 900, 1800]
-    # check: a .srt shifted by -9.7 s and played at 23.976 instead of 24 frames/s must land back on the reference,
-    # and be preferred over an unrelated file, even if that one is the first choice
-    truth = [(t, t + 2, "x") for t in (7.3 * n + (n * n * 37 % 50) / 10 for n in range(800))]
-    wins = [sorted(t for t, _, _ in truth if a <= t <= a + 120) for a in (600, 4000)]
-    slow = [((t - 9.7) * 24 / 23.976, (e - 9.7) * 24 / 23.976, x) for t, e, x in truth]
-    i, fixed, note, changed = fit_subs([[(t * 1.3 + 500, e, x) for t, e, x in truth], slow], wins)
-    assert i == 1 and changed and "shifted" in note and max(abs(f[0] - t[0]) for f, t in zip(fixed, truth)) < 0.5, (i, note)
-    assert fit_subs([truth], wins)[2:] == ("checked: in sync", False)
-    assert parse_srt(write_srt(truth[:3]))[2][0] == truth[2][0]

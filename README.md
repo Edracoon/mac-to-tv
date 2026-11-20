@@ -46,7 +46,7 @@ curl -L -o bin/TorrServer \
 chmod +x bin/TorrServer
 
 # 4. Check
-python3 server.py --selftest
+python3 -m unittest
 ```
 
 | Tool | Role | Required? |
@@ -280,7 +280,7 @@ it, including one that did not start the launch. `POST /api/dismiss` clears a fa
 
 | Folder | Contents | Copy to another Mac? |
 |---|---|---|
-| `server.py`, `sources.py`, `subs.py`, `tv.py`, `index.html`, `service.sh`, `README.md`, `CONTRIBUTING.md` | the application | yes |
+| `server.py`, `sources.py`, `subs.py`, `tv.py`, `index.html`, `tests/`, `service.sh`, `README.md`, `CONTRIBUTING.md` | the application | yes |
 | `config.json` | chosen TV and add-on list | yes, if you want to keep them |
 | `lan-key.txt` | local network access key (created by `--lan`) | no, it is recreated |
 | `progress.json` | movies started or finished and their position | yes, if you want to keep the history |
