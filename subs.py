@@ -2,7 +2,7 @@
 the movie (against a subtitle track embedded in the video, else against its sound). Nothing here knows about the TV
 or the page; server.py decides what to do with the result.
 
-Tests: tests/unit/test_subs.py
+Tests: tests/unit/test_subs.py. The thresholds of the check were measured with tests/bench/ (see its README).
 """
 import bisect
 import hashlib

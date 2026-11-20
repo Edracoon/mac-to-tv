@@ -27,3 +27,5 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+# recordings made by tests/bench/collect.py (subtitle texts, sound measurements)
+tests/bench/data/

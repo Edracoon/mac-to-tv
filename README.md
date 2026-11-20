@@ -307,6 +307,9 @@ python3 -m unittest discover -s tests/e2e -t .   # the server driving a fake TV
 
 The tests use no real TV and no torrent engine, and write nothing to the files of an installation.
 
+`tests/bench/` is apart: two scripts, run by hand, that measure the automatic subtitle check on real movies
+(see [its README](tests/bench/README.md)). The thresholds of the check come from there.
+
 ## Folders
 
 | Folder | Contents | Copy to another Mac? |
