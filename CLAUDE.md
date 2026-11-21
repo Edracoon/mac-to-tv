@@ -1,6 +1,6 @@
 # mac-to-tv
 
-Local web UI, served by a Mac, to control a TV on the local network and play videos on it. Start with `README.md`
+Local web UI, served by a Mac, to control a TV on the local network and play videos on it. Start with `README.md`, then `docs/how-it-works.md`
 (what it does, how it is laid out) and `CONTRIBUTING.md` (how TV support is added).
 
 ## Agent skills

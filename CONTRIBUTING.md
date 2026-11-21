@@ -33,7 +33,7 @@ Then run `python3 server.py`, choose the TV in the page and try, in order: a fil
 seeking in the video, a YouTube link, a movie with subtitles.
 
 **Open an issue with**: brand, model, year, the line printed by `python3 tv.py`, and what works or not.
-Even an "everything works" is useful: it extends the README's list of verified TVs.
+Even an "everything works" is useful: it extends the list of verified TVs.
 
 ## 2. Fix playback on a TV
 
@@ -52,7 +52,7 @@ To understand what the TV asks for, start the server with `> server.log 2>&1`: e
 Rules for these fixes:
 - do not break the TVs already verified: if your TV requires something else, make it conditional on what it advertises
   (manufacturer, model, services), not on a constant;
-- note the quirk you found in the README, in the driver section or the compatibility table.
+- note the quirk you found in [docs/how-it-works.md](docs/how-it-works.md), in the driver section or the compatibility table.
 
 No TV at hand? `tests/e2e/fake_tv.py` is a DLNA player that runs on the Mac; `python3 -m unittest` plays files and
 streams on it. If your TV misbehaves in a way it does not reproduce, add the behaviour to it, with a test.
@@ -150,7 +150,7 @@ Then in the page: every button shown must have its effect on the TV, and no butt
 
 - One driver per pull request, with: brand, model and year of the TV tested, the output of `python3 tv.py`, and the list
   of keys tried one by one.
-- Update the README: the "Which TVs are compatible?" table and, if useful, a section on the driver
+- Update [docs/how-it-works.md](docs/how-it-works.md): the "Which TVs are compatible?" table and, if useful, a section on the driver
   (ports, quirks), modeled on the Arçelik one.
 - Only declare compatible what you have seen working on a real TV.
 - No dependency to install with `pip`, no personal file (`config.json`, `progress.json`, `lan-key.txt`

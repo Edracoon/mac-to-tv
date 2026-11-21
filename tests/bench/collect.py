@@ -32,7 +32,7 @@ engine.URL = "http://127.0.0.1:8091"
 def start_engine():
     exe, home = ROOT / "bin" / "TorrServer", DATA / "engine"
     if not exe.exists():
-        sys.exit("bin/TorrServer is missing (see the README)")
+        sys.exit("bin/TorrServer is missing (see the README, "Get started")")
     home.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen([exe, "--ip", "127.0.0.1", "--port", "8091", "--path", home, "--logpath", home / "ts.log"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
